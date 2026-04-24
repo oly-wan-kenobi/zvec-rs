@@ -1,0 +1,51 @@
+[package]
+name = "zvec"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Rust bindings to zvec, an in-process vector database by Alibaba."
+repository = "https://github.com/oly-wan-kenobi/zvec-rs"
+readme = "README.md"
+keywords = ["vector", "database", "embedding", "ann", "ffi"]
+categories = ["api-bindings", "database"]
+links = "zvec_c_api"
+exclude = [
+    "/.github",
+    "/target",
+]
+
+[features]
+default = []
+# Try pkg-config first to locate the zvec C API library.
+pkg-config = ["dep:pkg-config"]
+# Download upstream zvec's PyPI wheel at build time and extract
+# `libzvec_c_api.so` (or the platform equivalent) plus `c_api.h` into
+# `OUT_DIR`, then link against that. Supported targets: Linux x86_64 /
+# aarch64, macOS arm64, Windows x86_64. On unsupported targets the build
+# falls back to the regular `ZVEC_LIB_DIR` / `ZVEC_ROOT` / `pkg-config`
+# discovery flow.
+bundled = ["dep:ureq", "dep:zip", "dep:sha2"]
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.70"
+pkg-config = { version = "0.3", optional = true }
+ureq = { version = "2.10", default-features = false, features = ["tls"], optional = true }
+zip = { version = "2.2", default-features = false, features = ["deflate"], optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[[example]]
+name = "version"
+path = "examples/version.rs"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[package.metadata.docs.rs]
+# docs.rs has no zvec library installed, so we skip linking entirely and
+# only emit the FFI declarations.
+rustdoc-args = ["--cfg", "docsrs"]
+features = []
