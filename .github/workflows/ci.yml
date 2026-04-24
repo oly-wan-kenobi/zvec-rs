@@ -17,6 +17,9 @@ jobs:
   build-zvec:
     name: Build libzvec_c_api (from source)
     runs-on: ubuntu-22.04
+    # A clean zvec build (RocksDB + Arrow + Protobuf + glog + gflags + …)
+    # easily overruns the default GH Actions timeout; keep a big budget.
+    timeout-minutes: 120
     outputs:
       cache-key: ${{ steps.meta.outputs.cache-key }}
     steps:
@@ -35,17 +38,33 @@ jobs:
           path: zvec-install
           key: ${{ steps.meta.outputs.cache-key }}
 
+      - name: Free up runner disk
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
       - name: Install build dependencies
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build build-essential git patch ca-certificates
+            cmake ninja-build build-essential git patch ca-certificates \
+            pkg-config python3
 
       - name: Build libzvec_c_api via scripts/build-zvec.sh
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           CMAKE_GENERATOR: Ninja
+          # Cap parallel compile to keep peak RSS under the 16 GB runner.
+          # Arrow + RocksDB C++ templates are the most memory-hungry bits.
+          JOBS: "2"
         run: |
           scripts/build-zvec.sh "$PWD/zvec-install"
 
