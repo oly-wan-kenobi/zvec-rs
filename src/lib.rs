@@ -105,6 +105,7 @@
 
 pub mod sys;
 
+mod builder;
 mod collection;
 mod config;
 mod doc;
@@ -120,6 +121,7 @@ mod stats;
 mod types;
 mod version;
 
+pub use builder::{CollectionSchemaBuilder, FieldSchemaBuilder, VectorQueryBuilder};
 pub use collection::{Collection, DocSet, WriteResult, WriteSummary};
 pub use config::{initialize, is_initialized, shutdown, Config, LogConfig};
 pub use doc::{Doc, DocRef};

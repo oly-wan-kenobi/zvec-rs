@@ -117,6 +117,41 @@ fn delete_then_query_empty() -> zvec::Result<()> {
 }
 
 #[test]
+fn builder_roundtrip() -> zvec::Result<()> {
+    let schema = CollectionSchema::builder("builder_collection")
+        .field(FieldSchema::string("id").invert_index(true, false))
+        .field(
+            FieldSchema::vector_fp32("embedding", 3)
+                .hnsw(16, 200)
+                .metric(MetricType::Cosine),
+        )
+        .build()?;
+    let path = tmp_path("builder");
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let mut d = Doc::new()?;
+    d.set_pk("x")?;
+    d.add_string("id", "x")?;
+    d.add_vector_fp32("embedding", &[0.1, 0.2, 0.3])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let q = VectorQuery::builder()
+        .field("embedding")
+        .vector_fp32(&[0.1, 0.2, 0.3])
+        .topk(1)
+        .include_vector(true)
+        .build()?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).and_then(|r| r.pk_copy()).as_deref(),
+        Some("x")
+    );
+    Ok(())
+}
+
+#[test]
 fn schema_introspection() -> zvec::Result<()> {
     let schema = basic_schema()?;
     assert_eq!(schema.name().as_deref(), Some("it_collection"));
