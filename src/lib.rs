@@ -115,6 +115,7 @@ mod error;
 mod ffi_util;
 mod hybrid;
 mod index_params;
+mod into_doc;
 mod options;
 mod query;
 mod query_params;
@@ -135,6 +136,7 @@ pub use doc::{Doc, DocRef};
 pub use error::{clear_last_error, ErrorCode, Result, ZvecError};
 pub use hybrid::HybridSearch;
 pub use index_params::IndexParams;
+pub use into_doc::IntoDoc;
 pub use options::CollectionOptions;
 pub use query::{GroupByVectorQuery, VectorQuery};
 pub use query_params::{FlatQueryParams, HnswQueryParams, IvfQueryParams};
@@ -142,3 +144,9 @@ pub use schema::{CollectionSchema, FieldSchema, FieldSchemaRef};
 pub use stats::CollectionStats;
 pub use types::{DataType, DocOperator, IndexType, LogLevel, LogType, MetricType, QuantizeType};
 pub use version::{check_version, version, version_major, version_minor, version_patch};
+
+/// Re-export of the `IntoDoc` derive macro from the `zvec-derive` crate.
+///
+/// Available with the `derive` cargo feature.
+#[cfg(feature = "derive")]
+pub use zvec_derive::IntoDoc;

@@ -13,7 +13,11 @@ links = "zvec_c_api"
 exclude = [
     "/.github",
     "/target",
+    "/zvec-derive/target",
 ]
+
+[workspace]
+members = [".", "zvec-derive"]
 
 [features]
 default = []
@@ -36,11 +40,14 @@ half = ["dep:half"]
 # Async wrapper around `Collection` that bridges every blocking operation
 # through `tokio::task::spawn_blocking`. Requires a running tokio runtime.
 tokio = ["dep:tokio"]
+# `#[derive(IntoDoc)]` — struct-to-Doc conversion via a proc macro.
+derive = ["dep:zvec-derive"]
 
 [dependencies]
 serde_json = { version = "1", optional = true }
 half = { version = "2", optional = true }
 tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
+zvec-derive = { version = "0.1", path = "zvec-derive", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }

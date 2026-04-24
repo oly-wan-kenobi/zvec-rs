@@ -308,6 +308,71 @@ fn insert_iter_batches_correctly() -> zvec::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "derive")]
+#[test]
+fn derive_into_doc_roundtrip() -> zvec::Result<()> {
+    use zvec::IntoDoc;
+
+    #[derive(IntoDoc)]
+    #[allow(dead_code)]
+    struct Article {
+        #[zvec(pk)]
+        id: String,
+        title: String,
+        #[zvec(rename = "text")]
+        body: String,
+        #[zvec(vector_fp32)]
+        embedding: Vec<f32>,
+        summary: Option<String>,
+        #[zvec(skip)]
+        _audit: u64,
+    }
+
+    // Schema needs a `text` field because `body` was renamed.
+    let mut schema = CollectionSchema::new("articles")?;
+    let mut invert = IndexParams::new(IndexType::Invert)?;
+    invert.set_invert_params(true, false)?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::Cosine)?;
+    hnsw.set_hnsw_params(16, 200)?;
+
+    for name in ["id", "title", "text"] {
+        let mut f = FieldSchema::new(name, DataType::String, true, 0)?;
+        f.set_index_params(&invert)?;
+        schema.add_field(&f)?;
+    }
+    let mut summary = FieldSchema::new("summary", DataType::String, true, 0)?;
+    summary.set_index_params(&invert)?;
+    schema.add_field(&summary)?;
+    let mut emb = FieldSchema::new("embedding", DataType::VectorFp32, false, 3)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+
+    let path = tmp_path("derive");
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let a = Article {
+        id: "a".into(),
+        title: "Hello".into(),
+        body: "body text".into(),
+        embedding: vec![0.1, 0.2, 0.3],
+        summary: None,
+        _audit: 42,
+    };
+    let doc = a.into_doc()?;
+    collection.insert(&[&doc])?;
+    collection.flush()?;
+
+    // Fetch back by pk.
+    let results = collection.fetch(&["a"])?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).and_then(|r| r.pk_copy()).as_deref(),
+        Some("a")
+    );
+    Ok(())
+}
+
 #[test]
 fn schema_introspection() -> zvec::Result<()> {
     let schema = basic_schema()?;
