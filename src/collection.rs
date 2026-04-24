@@ -314,6 +314,62 @@ impl Collection {
         self.batch_results(docs, sys::zvec_collection_upsert_with_results)
     }
 
+    /// Stream [`Doc`]s from an iterator into the collection in batches of
+    /// `batch_size`. Accumulates per-batch [`WriteSummary`]s into a single
+    /// returned summary; stops on the first error.
+    ///
+    /// Useful for loading large corpora where collecting every `Doc` into a
+    /// `Vec` up front would be wasteful or impossible.
+    pub fn insert_iter<I>(&self, docs: I, batch_size: usize) -> Result<WriteSummary>
+    where
+        I: IntoIterator<Item = Doc>,
+    {
+        self.batched_write(docs, batch_size, Collection::insert)
+    }
+
+    /// As [`Self::insert_iter`] but using [`Self::update`] for each batch.
+    pub fn update_iter<I>(&self, docs: I, batch_size: usize) -> Result<WriteSummary>
+    where
+        I: IntoIterator<Item = Doc>,
+    {
+        self.batched_write(docs, batch_size, Collection::update)
+    }
+
+    /// As [`Self::insert_iter`] but using [`Self::upsert`] for each batch.
+    pub fn upsert_iter<I>(&self, docs: I, batch_size: usize) -> Result<WriteSummary>
+    where
+        I: IntoIterator<Item = Doc>,
+    {
+        self.batched_write(docs, batch_size, Collection::upsert)
+    }
+
+    fn batched_write<I, F>(&self, docs: I, batch_size: usize, op: F) -> Result<WriteSummary>
+    where
+        I: IntoIterator<Item = Doc>,
+        F: Fn(&Collection, &[&Doc]) -> Result<WriteSummary>,
+    {
+        assert!(batch_size > 0, "batch_size must be > 0");
+        let mut total = WriteSummary::default();
+        let mut batch: Vec<Doc> = Vec::with_capacity(batch_size);
+        for doc in docs {
+            batch.push(doc);
+            if batch.len() >= batch_size {
+                let refs: Vec<&Doc> = batch.iter().collect();
+                let s = op(self, &refs)?;
+                total.success += s.success;
+                total.error += s.error;
+                batch.clear();
+            }
+        }
+        if !batch.is_empty() {
+            let refs: Vec<&Doc> = batch.iter().collect();
+            let s = op(self, &refs)?;
+            total.success += s.success;
+            total.error += s.error;
+        }
+        Ok(total)
+    }
+
     fn batch_results(
         &self,
         docs: &[&Doc],
