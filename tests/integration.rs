@@ -1676,3 +1676,470 @@ async fn async_delete_by_filter_scopes() {
     collection.flush().await.expect("flush");
     assert_eq!(collection.stats().await.expect("stats").doc_count(), 2);
 }
+
+// -----------------------------------------------------------------------------
+// Round 4: close the remaining vector / array type gaps, DDL, query params,
+// and derive-macro edge cases.
+// -----------------------------------------------------------------------------
+
+/// Build a single-vector schema parameterised by data type + dimension,
+/// using an HNSW cosine index. Used by the fp64/int16/etc. tests below.
+fn single_vector_schema(
+    name: &str,
+    data_type: DataType,
+    dim: u32,
+    metric: MetricType,
+) -> zvec::Result<CollectionSchema> {
+    let mut schema = CollectionSchema::new(name)?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(metric)?;
+    hnsw.set_hnsw_params(16, 200)?;
+    let mut emb = FieldSchema::new("embedding", data_type, false, dim)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+    Ok(schema)
+}
+
+// -----------------------------------------------------------------------------
+// Vector DataType support: the Rust enum mirrors the C API's full set, but
+// in zvec 0.3.1 dense_vector only accepts FP32 and Int8. The other
+// variants (FP64, Int4, Int16, Binary32/64) are rejected at schema
+// validation with InvalidArgument("... only support FP32, but
+// field[X]'s data type is ..."). Pin that quirk so nobody wastes time
+// trying to make them work without an upstream change.
+// -----------------------------------------------------------------------------
+
+#[test]
+fn non_fp32_dense_vector_types_are_rejected_by_schema() {
+    for t in [
+        DataType::VectorFp64,
+        DataType::VectorInt16,
+        DataType::VectorInt4,
+        DataType::VectorBinary32,
+        DataType::VectorBinary64,
+    ] {
+        let dim = match t {
+            DataType::VectorBinary32 => 64,
+            DataType::VectorBinary64 => 128,
+            _ => 3,
+        };
+        let path = tmp_path(&format!("reject_{t:?}"));
+        let schema = single_vector_schema(&format!("reject_{t:?}"), t, dim, MetricType::Cosine)
+            .expect("schema builds at the Rust level");
+        match Collection::create_and_open(&path, &schema, None) {
+            Ok(_) => panic!("expected {t:?} to be rejected as dense_vector"),
+            Err(err) => {
+                assert_eq!(err.code, zvec::ErrorCode::InvalidArgument);
+                assert!(
+                    err.message
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains("fp32"),
+                    "expected 'only support FP32' message for {t:?}; got {:?}",
+                    err.message
+                );
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Array type round-trips: int32, uint32, uint64, double
+// (array_int64 is deliberately skipped — see PR #16: zvec's wire format
+//  for arrays exposed a SIGSEGV in readback for that one variant.)
+// -----------------------------------------------------------------------------
+
+/// Schema with a required vector + the array field under test.
+fn array_schema(name: &str, array_field: FieldSchema) -> zvec::Result<CollectionSchema> {
+    let mut schema = CollectionSchema::new(name)?;
+    let id = FieldSchema::new("id", DataType::String, false, 0)?;
+    schema.add_field(&id)?;
+    schema.add_field(&array_field)?;
+    // zvec requires at least one vector field per collection.
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::Cosine)?;
+    hnsw.set_hnsw_params(16, 200)?;
+    let mut emb = FieldSchema::new("embedding", DataType::VectorFp32, false, 3)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+    Ok(schema)
+}
+
+#[test]
+fn array_int32_round_trip() -> zvec::Result<()> {
+    let path = tmp_path("arr_i32");
+    let field = FieldSchema::new("nums", DataType::ArrayInt32, true, 0)?;
+    let collection = Collection::create_and_open(&path, &array_schema("it_arr_i32", field)?, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_array_int32("nums", &[1, -2, 3, -4])?;
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let got = collection.fetch(&["a"])?;
+    assert_eq!(
+        got.get(0).unwrap().get_array_int32("nums")?,
+        vec![1, -2, 3, -4]
+    );
+    Ok(())
+}
+
+#[test]
+fn array_uint32_round_trip() -> zvec::Result<()> {
+    let path = tmp_path("arr_u32");
+    let field = FieldSchema::new("counts", DataType::ArrayUInt32, true, 0)?;
+    let collection = Collection::create_and_open(&path, &array_schema("it_arr_u32", field)?, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_array_uint32("counts", &[1, 2, 3, 4])?;
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let got = collection.fetch(&["a"])?;
+    assert_eq!(
+        got.get(0).unwrap().get_array_uint32("counts")?,
+        vec![1u32, 2, 3, 4]
+    );
+    Ok(())
+}
+
+#[test]
+fn array_uint64_round_trip() -> zvec::Result<()> {
+    let path = tmp_path("arr_u64");
+    let field = FieldSchema::new("bigs", DataType::ArrayUInt64, true, 0)?;
+    let collection = Collection::create_and_open(&path, &array_schema("it_arr_u64", field)?, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_array_uint64("bigs", &[u64::MAX, 0, 42])?;
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let got = collection.fetch(&["a"])?;
+    assert_eq!(
+        got.get(0).unwrap().get_array_uint64("bigs")?,
+        vec![u64::MAX, 0, 42]
+    );
+    Ok(())
+}
+
+#[test]
+fn array_double_round_trip() -> zvec::Result<()> {
+    let path = tmp_path("arr_f64");
+    let field = FieldSchema::new("scores", DataType::ArrayDouble, true, 0)?;
+    let collection = Collection::create_and_open(&path, &array_schema("it_arr_f64", field)?, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_array_double("scores", &[0.5, 1.5, 2.5])?;
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let got = collection.fetch(&["a"])?;
+    assert_eq!(
+        got.get(0).unwrap().get_array_double("scores")?,
+        vec![0.5, 1.5, 2.5]
+    );
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// alter_column + Collection::open error path
+// -----------------------------------------------------------------------------
+
+#[test]
+fn alter_column_renames_int_column() -> zvec::Result<()> {
+    // alter_column can rename a column without rebuilding the whole
+    // collection. Verify the rename shows up in live schema.
+    let path = tmp_path("alter_col");
+    let schema = bare_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let orig = FieldSchema::new("counter", DataType::Int64, true, 0)?;
+    collection.add_column(&orig, None)?;
+    assert!(collection.schema()?.has_field("counter"));
+
+    collection.alter_column("counter", Some("hits"), None)?;
+    let after = collection.schema()?;
+    assert!(
+        after.has_field("hits"),
+        "renamed column should be reachable by its new name"
+    );
+    assert!(
+        !after.has_field("counter"),
+        "old column name should no longer exist after rename"
+    );
+    Ok(())
+}
+
+#[test]
+fn open_on_missing_path_errors() -> zvec::Result<()> {
+    // Opening a path that was never created must not panic or hang;
+    // it should surface an error. We don't pin the exact code —
+    // zvec reports either NotFound or FailedPrecondition depending
+    // on version — just that it isn't Ok.
+    let path = tmp_path("never_created");
+    match Collection::open(&path, None) {
+        Ok(_) => panic!("open on a non-existent path should error"),
+        Err(err) => assert_ne!(err.code, zvec::ErrorCode::Ok),
+    }
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// IvfQueryParams + FlatQueryParams: getter/setter round-trip + attach to query.
+// (Collection::query exposes set_ivf_params/set_flat_params on VectorQuery;
+// exercising them against an actual IVF/Flat index is a bigger setup, so we
+// focus on "the config builds and attaches cleanly".)
+// -----------------------------------------------------------------------------
+
+#[test]
+fn ivf_query_params_round_trip() -> zvec::Result<()> {
+    use zvec::IvfQueryParams;
+
+    let mut p = IvfQueryParams::new(8, false, 1.25)?;
+    assert_eq!(p.nprobe(), 8);
+    assert!(!p.is_using_refiner());
+    assert!((p.scale_factor() - 1.25).abs() < f32::EPSILON);
+
+    p.set_nprobe(32)?;
+    p.set_is_linear(true)?;
+    p.set_is_using_refiner(true)?;
+    p.set_radius(0.75)?;
+    p.set_scale_factor(2.0)?;
+    assert_eq!(p.nprobe(), 32);
+    assert!(p.is_linear());
+    assert!(p.is_using_refiner());
+    assert!((p.radius() - 0.75).abs() < f32::EPSILON);
+    assert!((p.scale_factor() - 2.0).abs() < f32::EPSILON);
+
+    // Attach to a VectorQuery — this consumes the params.
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(5)?;
+    q.set_ivf_params(p)?;
+    Ok(())
+}
+
+#[test]
+fn flat_query_params_round_trip() -> zvec::Result<()> {
+    use zvec::FlatQueryParams;
+
+    let mut p = FlatQueryParams::new(false, 1.0)?;
+    assert!(!p.is_using_refiner());
+    p.set_is_using_refiner(true)?;
+    p.set_is_linear(true)?;
+    p.set_radius(0.1)?;
+    p.set_scale_factor(3.0)?;
+    assert!(p.is_using_refiner());
+    assert!(p.is_linear());
+    assert!((p.radius() - 0.1).abs() < f32::EPSILON);
+    assert!((p.scale_factor() - 3.0).abs() < f32::EPSILON);
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(1)?;
+    q.set_flat_params(p)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// VectorQuery::set_query_vector_fp64 / _fp16
+// -----------------------------------------------------------------------------
+
+#[test]
+fn query_vector_fp64_setter_packs_bytes() -> zvec::Result<()> {
+    // dense_vector FP64 isn't accepted at the schema level in
+    // zvec 0.3.1 (see non_fp32_dense_vector_types_are_rejected_by_schema)
+    // so we can't execute an fp64 query end-to-end. This test just
+    // confirms the byte-packing setter doesn't fail on a plausible
+    // input — the same shape as what a user would call if/when
+    // upstream adds support.
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp64(&[0.1_f64, 0.2, 0.3])?;
+    q.set_topk(1)?;
+    Ok(())
+}
+
+#[cfg(feature = "half")]
+#[test]
+fn query_vector_fp16_attaches() -> zvec::Result<()> {
+    use half::f16;
+    let path = tmp_path("qv_fp16");
+    let schema = single_vector_schema("it_qv_fp16", DataType::VectorFp16, 3, MetricType::Cosine)?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_vector_fp16(
+        "embedding",
+        &[f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0)],
+    )?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp16(&[f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0)])?;
+    q.set_topk(1)?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 1);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Derive macro edge cases: FromDoc missing-required, Option tolerance, rename.
+// -----------------------------------------------------------------------------
+
+#[cfg(feature = "derive")]
+#[test]
+fn from_doc_missing_required_field_errors() -> zvec::Result<()> {
+    use zvec::{FromDoc, IntoDoc};
+
+    #[derive(IntoDoc, FromDoc, Debug)]
+    struct WithRequired {
+        #[zvec(pk)]
+        id: String,
+        views: i64,
+    }
+
+    // Build a doc that's missing `views` — FromDoc should refuse it.
+    // For scalar i64 the derive delegates straight to Doc::get_int64,
+    // which surfaces zvec's own "Field not found in document" message
+    // rather than the derive's "doc is missing field `X`" wrapper
+    // (the wrapper only kicks in for Rust-side String fields). So
+    // the assertion checks the error code + a generic "not found"
+    // substring rather than the field name.
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    let err = WithRequired::from_doc(d.borrow())
+        .expect_err("FromDoc should refuse to decode without a required field");
+    assert_eq!(err.code, zvec::ErrorCode::InvalidArgument);
+    assert!(
+        err.message
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains("not found"),
+        "error message should indicate the field is missing; got {:?}",
+        err.message
+    );
+    Ok(())
+}
+
+#[cfg(feature = "derive")]
+#[test]
+fn from_doc_option_tolerates_missing_field() -> zvec::Result<()> {
+    use zvec::{FromDoc, IntoDoc};
+
+    #[derive(IntoDoc, FromDoc)]
+    struct Partial {
+        #[zvec(pk)]
+        id: String,
+        maybe_views: Option<i64>,
+        maybe_title: Option<String>,
+    }
+
+    // None emits set_field_null on IntoDoc, and FromDoc maps back to
+    // None. Also exercise the "field isn't even on the doc" path by
+    // constructing the doc manually without the optional fields.
+    let both_none = Partial {
+        id: "a".into(),
+        maybe_views: None,
+        maybe_title: None,
+    };
+    let d = both_none.into_doc()?;
+    let back = Partial::from_doc(d.borrow())?;
+    assert_eq!(back.id, "a");
+    assert!(back.maybe_views.is_none());
+    assert!(back.maybe_title.is_none());
+
+    let mut bare = Doc::new()?;
+    bare.set_pk("b")?;
+    let sparse = Partial::from_doc(bare.borrow())?;
+    assert_eq!(sparse.id, "b");
+    assert!(sparse.maybe_views.is_none());
+    assert!(sparse.maybe_title.is_none());
+
+    let full = Partial {
+        id: "c".into(),
+        maybe_views: Some(42),
+        maybe_title: Some("hi".into()),
+    };
+    let d = full.into_doc()?;
+    let round = Partial::from_doc(d.borrow())?;
+    assert_eq!(round.maybe_views, Some(42));
+    assert_eq!(round.maybe_title.as_deref(), Some("hi"));
+    Ok(())
+}
+
+#[cfg(feature = "derive")]
+#[test]
+fn derive_rename_crosses_field_name_boundary() -> zvec::Result<()> {
+    use zvec::{FromDoc, IntoDoc};
+
+    // Rust-side `body` is serialised under zvec field "text", then
+    // round-tripped back through the rename. Also verify the doc
+    // actually carries "text", not "body".
+    #[derive(IntoDoc, FromDoc)]
+    struct Renamed {
+        #[zvec(pk)]
+        id: String,
+        #[zvec(rename = "text")]
+        body: String,
+    }
+
+    let orig = Renamed {
+        id: "a".into(),
+        body: "hello".into(),
+    };
+    let doc = orig.into_doc()?;
+    {
+        let borrow = doc.borrow();
+        assert!(borrow.has_field("text"));
+        assert!(!borrow.has_field("body"));
+    }
+    let back: Renamed = Renamed::from_doc(doc.borrow())?;
+    assert_eq!(back.id, "a");
+    assert_eq!(back.body, "hello");
+    Ok(())
+}
+
+#[cfg(feature = "derive")]
+#[test]
+fn derive_skip_uses_default() -> zvec::Result<()> {
+    use zvec::{FromDoc, IntoDoc};
+
+    #[derive(IntoDoc, FromDoc, Default)]
+    struct WithSkip {
+        #[zvec(pk)]
+        id: String,
+        #[zvec(skip)]
+        runtime_only: i64,
+        views: i64,
+    }
+
+    let orig = WithSkip {
+        id: "a".into(),
+        runtime_only: 999, // not serialised
+        views: 7,
+    };
+    let doc = orig.into_doc()?;
+    // `runtime_only` must not show up on the doc.
+    assert!(!doc.borrow().has_field("runtime_only"));
+    let back = WithSkip::from_doc(doc.borrow())?;
+    assert_eq!(back.id, "a");
+    assert_eq!(back.views, 7);
+    // Skipped field falls back to Default::default().
+    assert_eq!(back.runtime_only, 0);
+    Ok(())
+}
