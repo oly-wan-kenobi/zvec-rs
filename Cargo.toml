@@ -30,6 +30,10 @@ pkg-config = { version = "0.3", optional = true }
 name = "version"
 path = "examples/version.rs"
 
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
 [package.metadata.docs.rs]
 # docs.rs has no zvec library installed, so we skip linking entirely and
 # only emit the FFI declarations.

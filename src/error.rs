@@ -40,8 +40,38 @@ impl ErrorCode {
         }
     }
 
+    pub fn to_raw(self) -> sys::zvec_error_code_t::Type {
+        match self {
+            ErrorCode::Ok => raw::ZVEC_OK,
+            ErrorCode::NotFound => raw::ZVEC_ERROR_NOT_FOUND,
+            ErrorCode::AlreadyExists => raw::ZVEC_ERROR_ALREADY_EXISTS,
+            ErrorCode::InvalidArgument => raw::ZVEC_ERROR_INVALID_ARGUMENT,
+            ErrorCode::PermissionDenied => raw::ZVEC_ERROR_PERMISSION_DENIED,
+            ErrorCode::FailedPrecondition => raw::ZVEC_ERROR_FAILED_PRECONDITION,
+            ErrorCode::ResourceExhausted => raw::ZVEC_ERROR_RESOURCE_EXHAUSTED,
+            ErrorCode::Unavailable => raw::ZVEC_ERROR_UNAVAILABLE,
+            ErrorCode::Internal => raw::ZVEC_ERROR_INTERNAL_ERROR,
+            ErrorCode::NotSupported => raw::ZVEC_ERROR_NOT_SUPPORTED,
+            ErrorCode::Unknown => raw::ZVEC_ERROR_UNKNOWN,
+            ErrorCode::Other(n) => n as sys::zvec_error_code_t::Type,
+        }
+    }
+
     pub fn is_ok(self) -> bool {
         matches!(self, ErrorCode::Ok)
+    }
+
+    /// Return the description zvec attaches to this code (via
+    /// [`sys::zvec_error_code_to_string`]).
+    pub fn description(self) -> &'static str {
+        unsafe {
+            let ptr = sys::zvec_error_code_to_string(self.to_raw());
+            if ptr.is_null() {
+                return "";
+            }
+            // SAFETY: zvec documents these as static strings owned by the library.
+            CStr::from_ptr(ptr).to_str().unwrap_or("")
+        }
     }
 }
 
@@ -74,6 +104,9 @@ pub struct ZvecError {
     pub message: Option<String>,
 }
 
+/// Convenience alias for `Result<T, ZvecError>` used throughout the crate.
+pub type Result<T> = core::result::Result<T, ZvecError>;
+
 impl ZvecError {
     /// Construct an error from a raw code, pulling the current thread-local
     /// message out of the C API if one is set.
@@ -82,6 +115,15 @@ impl ZvecError {
         Self {
             code: ErrorCode::from_raw(code),
             message,
+        }
+    }
+
+    /// Construct an error with a static message (used for cases where the C
+    /// API did not provide a detailed message, e.g. `NULL`-returning creators).
+    pub fn with_message(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: Some(message.into()),
         }
     }
 }
@@ -97,13 +139,25 @@ impl fmt::Display for ZvecError {
 
 impl std::error::Error for ZvecError {}
 
+/// Convert a raw error code returned by a zvec C API call into a `Result`.
+pub(crate) fn check(code: sys::zvec_error_code_t::Type) -> Result<()> {
+    if code == raw::ZVEC_OK {
+        Ok(())
+    } else {
+        Err(ZvecError::from_code(code))
+    }
+}
+
+/// Clear the current thread-local last-error slot.
+pub fn clear_last_error() {
+    unsafe { sys::zvec_clear_error() };
+}
+
 /// Pulls the last error message out of zvec and frees the underlying buffer.
 ///
 /// # Safety
 ///
-/// Requires that the zvec C API has been linked in. The caller must uphold
-/// zvec's contract that `zvec_get_last_error` is safe to call concurrently
-/// from any thread (zvec documents it as thread-local).
+/// Requires that the zvec C API has been linked in.
 unsafe fn take_last_error_message() -> Option<String> {
     let mut buf: *mut std::os::raw::c_char = core::ptr::null_mut();
     let code = sys::zvec_get_last_error(&mut buf as *mut _);
