@@ -33,10 +33,17 @@ serde-json = ["dep:serde_json"]
 # are only reachable through the raw `add_vector_fp16_bits(&[u16])` /
 # `get_vector_fp16_bits` entry points.
 half = ["dep:half"]
+# Async wrapper around `Collection` that bridges every blocking operation
+# through `tokio::task::spawn_blocking`. Requires a running tokio runtime.
+tokio = ["dep:tokio"]
 
 [dependencies]
 serde_json = { version = "1", optional = true }
 half = { version = "2", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]
 bindgen = "0.70"

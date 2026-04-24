@@ -236,6 +236,39 @@ fn fp16_roundtrip() -> zvec::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "tokio")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_insert_query_roundtrip() {
+    use zvec::AsyncCollection;
+
+    let path = tmp_path("async_rt");
+    let schema = basic_schema().expect("schema");
+    let collection = AsyncCollection::create_and_open(path, schema, None)
+        .await
+        .expect("create");
+
+    let mut d = Doc::new().expect("doc");
+    d.set_pk("only").expect("pk");
+    d.add_string("id", "only").expect("id");
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])
+        .expect("vec");
+    let summary = collection.insert(vec![d]).await.expect("insert");
+    assert_eq!(summary.success, 1);
+    collection.flush().await.expect("flush");
+    assert_eq!(collection.stats().await.expect("stats").doc_count(), 1);
+
+    let mut q = VectorQuery::new().expect("query");
+    q.set_field_name("embedding").expect("field");
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0]).expect("vector");
+    q.set_topk(1).expect("topk");
+    let results = collection.query(q).await.expect("query exec");
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).and_then(|r| r.pk_copy()).as_deref(),
+        Some("only")
+    );
+}
+
 #[test]
 fn insert_iter_batches_correctly() -> zvec::Result<()> {
     let path = tmp_path("insert_iter");
