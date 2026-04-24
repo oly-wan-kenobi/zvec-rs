@@ -105,6 +105,8 @@
 
 pub mod sys;
 
+#[cfg(feature = "tokio")]
+mod async_collection;
 mod builder;
 mod collection;
 mod config;
@@ -124,6 +126,8 @@ mod stats;
 mod types;
 mod version;
 
+#[cfg(feature = "tokio")]
+pub use async_collection::AsyncCollection;
 pub use builder::{CollectionSchemaBuilder, FieldSchemaBuilder, VectorQueryBuilder};
 pub use collection::{Collection, DocSet, WriteResult, WriteSummary};
 pub use config::{initialize, is_initialized, shutdown, Config, LogConfig};

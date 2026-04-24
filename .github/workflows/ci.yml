@@ -14,7 +14,7 @@ env:
   ZVEC_REF: v0.3.1
   # Feature combination CI exercises. Bump as new optional features
   # land so they get built + tested on every PR.
-  FEATURES: "bundled serde-json half"
+  FEATURES: "bundled serde-json half tokio"
 
 jobs:
   bundled-feature:
