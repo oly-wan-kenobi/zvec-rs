@@ -56,34 +56,47 @@ fn main() -> zvec::Result<()> {
 
 See `examples/basic.rs` for the Rust port of zvec's own `basic_example.c`.
 
-## Requirements
+## Building `libzvec_c_api` from source
 
-- A prebuilt `libzvec_c_api` on the link path.
-- `clang` / `libclang` for `bindgen` at build time.
-
-## Getting `libzvec_c_api`
-
-The easiest source is the official Python wheel — it ships a fully built
-`libzvec_c_api.so` (plus the static archives and headers) inside `lib/`:
+The crate links against `libzvec_c_api` — a shared library produced by zvec's
+own CMake build. Use the helper script in this repo; it pins zvec to the
+version whose header is vendored under `vendor/c_api.h`:
 
 ```sh
-pip download zvec --no-deps --only-binary=:all: --dest zvec-wheel
-cd zvec-wheel && unzip -q zvec-*.whl -d extracted
-export ZVEC_LIB_DIR="$PWD/extracted/lib"
-export LD_LIBRARY_PATH="$ZVEC_LIB_DIR:${LD_LIBRARY_PATH:-}"
+# Clones alibaba/zvec @ v0.3.1 with submodules, builds the zvec_c_api target,
+# and installs to ./zvec-install/{lib,include}.
+./scripts/build-zvec.sh "$PWD/zvec-install"
+
+export ZVEC_ROOT="$PWD/zvec-install"
+export LD_LIBRARY_PATH="$ZVEC_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cargo test
 ```
 
-Alternatives:
+What you need on the build host:
 
-- Build zvec from source via its CMake (heavy: pulls in RocksDB, Arrow,
-  Protobuf, glog, gflags, ANTLR, LZ4, CRoaring, …). Install, then point
-  `ZVEC_ROOT` at the prefix.
-- Link against a system-installed zvec. `pkg-config` lookup is available
-  behind the optional `pkg-config` cargo feature.
+- `cmake ≥ 3.13`, `ninja` (or `make`), a C++17 compiler, `git`, `patch`.
+- `libclang` / `clang` (for `bindgen` when compiling this crate).
+- Roughly **20–30 minutes** for a clean source build: zvec vendors RocksDB,
+  Apache Arrow, Protobuf, glog, gflags, ANTLR, LZ4, CRoaring, and RaBitQ as
+  git submodules and compiles them all.
 
-## Build-time configuration
+Overrides the script respects:
 
-`build.rs` locates the library in this order:
+| Variable          | Default                              | Purpose                          |
+|-------------------|--------------------------------------|----------------------------------|
+| `ZVEC_REF`        | `v0.3.1`                             | Git ref to check out             |
+| `ZVEC_REPO`       | `https://github.com/alibaba/zvec`    | Upstream repository URL          |
+| `ZVEC_SRC_DIR`    | (clone into `.zvec-build-work/`)     | Use an existing checkout         |
+| `ZVEC_BUILD_DIR`  | `.zvec-build-work/build`             | CMake build directory            |
+| `CMAKE_GENERATOR` | `Unix Makefiles`                     | e.g. `Ninja`                     |
+| `JOBS`            | `nproc`                              | Parallel build jobs              |
+
+If you already have zvec installed in a custom prefix, skip the script and
+point `ZVEC_ROOT` (or `ZVEC_LIB_DIR` / `ZVEC_INCLUDE_DIR` individually) at it.
+
+## Build-time configuration for the crate
+
+`build.rs` locates `libzvec_c_api` in this order:
 
 1. `ZVEC_LIB_DIR` — directory containing the library.
 2. `ZVEC_ROOT` — install prefix; adds `$ZVEC_ROOT/lib` (and `lib64` if present)
@@ -110,11 +123,13 @@ cargo run --example basic
 cargo test
 ```
 
-Each command needs `ZVEC_LIB_DIR` and `LD_LIBRARY_PATH` set as above.
+Each command needs `ZVEC_ROOT` (or `ZVEC_LIB_DIR`) and `LD_LIBRARY_PATH` set
+as above.
 
 ## Layout
 
 - `vendor/c_api.h` — pinned copy of zvec's public C API.
+- `scripts/build-zvec.sh` — reproducible source build helper.
 - `build.rs` — bindgen + linker discovery.
 - `src/sys.rs` — raw FFI.
 - `src/{collection,doc,schema,query,query_params,index_params,options,stats,config,types,error,version,ffi_util}.rs`
@@ -122,6 +137,8 @@ Each command needs `ZVEC_LIB_DIR` and `LD_LIBRARY_PATH` set as above.
 - `examples/` — `version` (minimal) and `basic` (port of the upstream C
   example).
 - `tests/integration.rs` — end-to-end roundtrip tests.
+- `.github/workflows/ci.yml` — builds zvec from source, caches the install
+  prefix, then runs fmt/clippy/tests.
 
 ## License
 

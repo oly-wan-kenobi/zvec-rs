@@ -9,13 +9,64 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # zvec ref whose c_api.h is vendored in this repo. When bumping
+  # `vendor/c_api.h`, bump this too.
+  ZVEC_REF: v0.3.1
 
 jobs:
+  build-zvec:
+    name: Build libzvec_c_api (from source)
+    runs-on: ubuntu-22.04
+    outputs:
+      cache-key: ${{ steps.meta.outputs.cache-key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute cache key
+        id: meta
+        run: |
+          echo "cache-key=zvec-${ZVEC_REF}-$(uname -s)-$(uname -m)-$(sha256sum scripts/build-zvec.sh | cut -c1-12)" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached zvec install
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: zvec-install
+          key: ${{ steps.meta.outputs.cache-key }}
+
+      - name: Install build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential git patch ca-certificates
+
+      - name: Build libzvec_c_api via scripts/build-zvec.sh
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: |
+          scripts/build-zvec.sh "$PWD/zvec-install"
+
+      - name: Upload install prefix as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libzvec_c_api
+          path: zvec-install
+          retention-days: 3
+
   lint-and-test:
     name: rustfmt + clippy + tests
+    needs: build-zvec
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libzvec_c_api
+          path: zvec-install
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -23,24 +74,13 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install libclang (for bindgen)
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang unzip
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Fetch prebuilt libzvec_c_api from the zvec wheel
+      - name: Wire zvec install into the environment
         run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/zvec-wheel"
-          # Pin to the zvec release whose c_api.h is vendored in this repo.
-          python -m pip download 'zvec==0.3.1' \
-            --no-deps --only-binary=:all: \
-            --dest "$RUNNER_TEMP/zvec-wheel" \
-            --timeout 120
-          unzip -q "$RUNNER_TEMP/zvec-wheel"/zvec-*.whl -d "$RUNNER_TEMP/zvec-wheel/extracted"
-          echo "ZVEC_LIB_DIR=$RUNNER_TEMP/zvec-wheel/extracted/lib" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/zvec-wheel/extracted/lib" >> "$GITHUB_ENV"
+          ABS="$PWD/zvec-install"
+          echo "ZVEC_ROOT=$ABS"             >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$ABS/lib"   >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
 
