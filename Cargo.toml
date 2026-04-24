@@ -6,6 +6,8 @@ rust-version = "1.75"
 license = "Apache-2.0"
 description = "Rust bindings to zvec, an in-process vector database by Alibaba."
 repository = "https://github.com/oly-wan-kenobi/zvec-rs"
+documentation = "https://docs.rs/zvec"
+homepage = "https://github.com/oly-wan-kenobi/zvec-rs"
 readme = "README.md"
 keywords = ["vector", "database", "embedding", "ann", "ffi"]
 categories = ["api-bindings", "database"]
@@ -14,6 +16,9 @@ exclude = [
     "/.github",
     "/target",
     "/zvec-derive/target",
+    "/CHANGELOG.md",
+    "/PUBLISHING.md",
+    "/scripts",
 ]
 
 [workspace]
