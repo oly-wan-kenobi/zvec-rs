@@ -1,94 +1,78 @@
 # Publishing to crates.io
 
-This workspace ships two crates and they must be published in a
-specific order because `zvec` depends on `zvec-derive`:
+Releases are cut by **pushing a `v*.*.*` git tag**. The
+[`Release` workflow](.github/workflows/release.yml) takes it from
+there: publishes both crates to crates.io in the right order, waits
+for the index to catch up, and creates a GitHub Release with the
+matching `CHANGELOG.md` section.
 
-1. `zvec-derive` — proc-macro crate.
-2. `zvec` — the main crate. Cargo will resolve `zvec-derive` from
-   crates.io, so step 1 must have landed and indexed first.
+## One-time setup
 
-## Prerequisites
+1. Generate a crates.io API token at <https://crates.io/me>.
+   Recommended scope: `publish-update`, restricted to `zvec` and
+   `zvec-derive`.
+2. Add it to the repo at *Settings → Secrets and variables → Actions
+   → New repository secret*:
+   - **Name:** `CARGO_REGISTRY_TOKEN`
+   - **Value:** the token from step 1.
+3. Make sure both crates already exist on crates.io under your
+   account, or that the token's account has the *Owners* role.
+   First publish of a brand-new crate name only requires that the
+   name is available.
 
-- Signed in to crates.io with a token in scope: `cargo login`.
-- Clean working tree on `main` at the release commit.
-- `vendor/c_api.h`, `ZVEC_REF` in `scripts/build-zvec.sh` and the
-  pinned wheels in `build.rs` all agree on the same zvec version.
-- Version bumped in both `Cargo.toml` and `zvec-derive/Cargo.toml`
-  and matched in the `zvec-derive` path-dep: `zvec-derive = {
-  version = "X.Y", path = "zvec-derive", optional = true }`.
-- `CHANGELOG.md` has a dated section for this version.
-
-## One-time prep (already done for 0.1.0)
-
-- Metadata in both `Cargo.toml`s: `description`, `license`,
-  `repository`, `documentation`, `homepage`, `readme`, `keywords`,
-  `categories`, `rust-version`.
-- `exclude` list on the main crate trims `.github/`, `target/`,
-  `scripts/`, `CHANGELOG.md`, `PUBLISHING.md`, and the nested
-  `zvec-derive/target` so only the library and examples ship.
-- docs.rs metadata (`all-features = true`, `docsrs` cfg) so the
-  published crate renders every feature with proper badges.
-
-## Dry-run each crate
-
-Dry-runs don't hit the index and don't produce an uploadable
-tarball — they just check that everything packages cleanly.
+## Cutting a release
 
 ```sh
-# Proc-macro subcrate — no platform-specific linking, so the verify
-# step is cheap.
-cargo publish -p zvec-derive --dry-run
-
-# Main crate. This will FAIL the first time you run it before
-# zvec-derive has been published: cargo resolves zvec-derive from
-# crates.io, and until it's there, the dependency can't be found.
-# Re-run after step 2 of the real publish below.
-cargo publish -p zvec --dry-run
+# 1. Bump the version in BOTH Cargo.toml files (root + zvec-derive),
+#    plus the path-dep version pin in the root:
+#       zvec-derive = { version = "X.Y.Z", path = "zvec-derive", optional = true }
+#    and update CHANGELOG.md: rename [Unreleased] to [X.Y.Z] — DATE.
+#
+# 2. Open the bump as a normal PR; merge to main once CI is green.
+#
+# 3. From main, tag and push:
+git pull origin main
+git tag -a vX.Y.Z -m "zvec X.Y.Z"
+git push origin vX.Y.Z
 ```
 
-## Real publish
+That last `git push` triggers the `Release` workflow on
+<https://github.com/oly-wan-kenobi/zvec-rs/actions/workflows/release.yml>.
+Watch it from there — it usually finishes in 2-3 minutes (most of
+that is waiting for the crates.io index to surface `zvec-derive`
+before publishing `zvec`).
+
+## What the workflow does
+
+1. Checks out the tagged commit.
+2. Verifies the tag matches the version in both `Cargo.toml`s.
+3. `cargo publish -p zvec-derive`.
+4. Polls `https://index.crates.io/zv/ec/zvec-derive` until the new
+   version shows up (timeout ~5 min).
+5. `cargo publish -p zvec --features bundled` — the `bundled`
+   feature gives `cargo`'s verify step a `libzvec_c_api` to link
+   against without any extra runner setup.
+6. Extracts the matching `## [X.Y.Z]` block from `CHANGELOG.md` and
+   creates a GitHub Release named `zvec X.Y.Z` with that body.
+
+## Manual fallback
+
+If you ever need to publish without the workflow (e.g. a hotfix from
+your laptop), the steps are exactly what the workflow runs:
 
 ```sh
-# 1. Publish zvec-derive first.
+cargo login                       # one-time, with your crates.io token
 cargo publish -p zvec-derive
-
-# 2. Wait for crates.io to index it (usually 30-60 seconds). You can
-# verify by watching:
-#     https://crates.io/crates/zvec-derive
-# or polling:
-curl -sI https://static.crates.io/crates/zvec-derive/zvec-derive-0.1.0.crate | head -1
-
-# 3. Publish zvec.
-cargo publish -p zvec
+# wait ~30-90s for the index to catch up
+cargo publish -p zvec --features bundled
+git tag -a vX.Y.Z -m "zvec X.Y.Z" && git push origin vX.Y.Z
+gh release create vX.Y.Z --notes-from-tag
 ```
-
-If step 3 fails with `no matching package named zvec-derive found`,
-the index hasn't caught up yet — wait another 30 seconds and retry.
-
-## Tag + GitHub release
-
-```sh
-git tag -a v0.1.0 -m "zvec 0.1.0"
-git push origin v0.1.0
-```
-
-Then on GitHub: *Releases → Draft a new release → tag `v0.1.0`*, copy
-the CHANGELOG section into the description, and publish.
 
 ## Post-publish verification
 
-- <https://crates.io/crates/zvec> shows 0.1.0.
+- <https://crates.io/crates/zvec> shows the new version.
 - <https://docs.rs/zvec> renders. docs.rs runs the build under
   `DOCS_RS=1`, so `build.rs` short-circuits the bundled-wheel fetch
-  and only runs `bindgen`; linking is skipped. Expect the doc build
-  to finish in under 60 s.
+  and only runs `bindgen`; linking is skipped.
 - README badges on GitHub resolve (CI, docs.rs, crates.io version).
-
-## Bumping for the next release
-
-```sh
-# Update the version in both Cargo.tomls and the path-dep version
-# pin, then:
-cargo update --workspace
-# Move CHANGELOG's [Unreleased] into a new dated section.
-```
