@@ -1,0 +1,37 @@
+[package]
+name = "zvec"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Rust bindings to zvec, an in-process vector database by Alibaba."
+repository = "https://github.com/oly-wan-kenobi/zvec-rs"
+readme = "README.md"
+keywords = ["vector", "database", "embedding", "ann", "ffi"]
+categories = ["api-bindings", "database"]
+links = "zvec_c_api"
+exclude = [
+    "/.github",
+    "/target",
+]
+
+[features]
+default = []
+# Try pkg-config first to locate the zvec C API library.
+pkg-config = ["dep:pkg-config"]
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.70"
+pkg-config = { version = "0.3", optional = true }
+
+[[example]]
+name = "version"
+path = "examples/version.rs"
+
+[package.metadata.docs.rs]
+# docs.rs has no zvec library installed, so we skip linking entirely and
+# only emit the FFI declarations.
+rustdoc-args = ["--cfg", "docsrs"]
+features = []
