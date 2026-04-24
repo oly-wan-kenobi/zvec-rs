@@ -1,8 +1,8 @@
 //! JSON <-> [`Doc`] bridge, gated on the `serde-json` cargo feature.
 //!
 //! zvec field types are static (STRING, INT64, VECTOR_FP32, …) but JSON
-//! is not — `[1, 2, 3]` alone could be a vector-fp32, an array<int64>,
-//! or an array<double>. The bridge resolves this by requiring a
+//! is not — `[1, 2, 3]` alone could be a vector-fp32, an `array<int64>`,
+//! or an `array<double>`. The bridge resolves this by requiring a
 //! [`CollectionSchema`] that describes each field's type; unknown JSON
 //! keys are rejected, and `"_pk"` is recognised as the primary key.
 //!
@@ -40,6 +40,7 @@ impl Doc {
     /// primary key when it's a string.
     ///
     /// Available with the `serde-json` cargo feature.
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde-json")))]
     pub fn from_json(value: &Value, schema: &CollectionSchema) -> Result<Self> {
         let obj = value.as_object().ok_or_else(|| {
             ZvecError::with_message(

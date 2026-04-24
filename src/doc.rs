@@ -169,6 +169,7 @@ impl Doc {
     ///
     /// Available with the `half` cargo feature.
     #[cfg(feature = "half")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "half")))]
     pub fn add_vector_fp16(&mut self, field_name: &str, vector: &[half::f16]) -> Result<()> {
         // SAFETY: `half::f16` is `#[repr(transparent)]` over `u16` — see the
         // `half` crate docs — so a `&[half::f16]` is bitwise a `&[u16]` of
@@ -582,6 +583,7 @@ impl<'a> DocRef<'a> {
     ///
     /// Available with the `half` cargo feature.
     #[cfg(feature = "half")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "half")))]
     pub fn get_vector_fp16(&self, name: &str) -> Result<Vec<half::f16>> {
         Ok(self
             .get_vector_fp16_bits(name)?
