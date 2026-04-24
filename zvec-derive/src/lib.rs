@@ -94,6 +94,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
+        #[allow(clippy::deref_addrof)]
         impl #impl_generics ::zvec::IntoDoc for #name #ty_generics #where_clause {
             fn into_doc(&self) -> ::zvec::Result<::zvec::Doc> {
                 let mut __doc = ::zvec::Doc::new()?;
@@ -288,6 +289,224 @@ fn scalar_or_hinted_setter(
     Ok(quote_spanned! { span =>
         __doc.#setter(#name, #access)?;
     })
+}
+
+// -----------------------------------------------------------------------------
+// FromDoc — inverse derive: read fields off a `DocRef` into a user struct.
+// -----------------------------------------------------------------------------
+
+/// Derive a `FromDoc` impl that constructs `Self` from a
+/// `zvec::DocRef<'_>`.
+///
+/// Mirrors [`macro@IntoDoc`]'s attribute set:
+///
+/// | key                      | effect                                                             |
+/// |--------------------------|--------------------------------------------------------------------|
+/// | `pk`                     | Field takes the document's primary key via `DocRef::pk_copy`.      |
+/// | `rename = "other"`       | Read the zvec-side field name `"other"` instead of the Rust ident. |
+/// | `skip`                   | Don't read from the doc; initialise via `Default::default()`.      |
+/// | `binary`                 | Read the field as `Vec<u8>` / binary.                              |
+/// | `vector_fp32`            | Read as `Vec<f32>` via `get_vector_fp32`.                          |
+/// | `vector_fp64`            | Read as `Vec<f64>` via `get_vector_fp64`.                          |
+/// | `vector_int8`            | Read as `Vec<i8>`  via `get_vector_int8`.                          |
+/// | `vector_int16`           | Read as `Vec<i16>` via `get_vector_int16`.                         |
+///
+/// `Option<T>` fields tolerate missing documents (returns `None`);
+/// non-`Option` fields error with `ErrorCode::InvalidArgument` when the
+/// doc is missing them.
+#[proc_macro_derive(FromDoc, attributes(zvec))]
+pub fn derive_from_doc(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_from_doc(input) {
+        Ok(ts) => ts.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn expand_from_doc(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let name = &input.ident;
+    let fields = match &input.data {
+        Data::Struct(DataStruct {
+            fields: Fields::Named(f),
+            ..
+        }) => &f.named,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &input,
+                "FromDoc can only be derived for structs with named fields",
+            ));
+        }
+    };
+
+    let mut inits = TokenStream2::new();
+
+    for field in fields {
+        let attrs = FieldAttrs::from(field)?;
+        let ident = field.ident.as_ref().unwrap();
+
+        if attrs.skip {
+            inits.extend(quote_spanned! { field.span() =>
+                #ident: ::core::default::Default::default(),
+            });
+            continue;
+        }
+
+        let zvec_name = attrs.rename.unwrap_or_else(|| ident.to_string());
+
+        let expr = if attrs.pk {
+            // Primary key: must be a String; pull via DocRef::pk_copy.
+            quote_spanned! { field.span() =>
+                __doc.pk_copy().ok_or_else(|| {
+                    ::zvec::ZvecError::with_message(
+                        ::zvec::ErrorCode::InvalidArgument,
+                        "doc is missing a primary key",
+                    )
+                })?
+            }
+        } else {
+            let name_lit = LitStr::new(&zvec_name, field.span());
+            field_reader(field, &attrs.kind, &name_lit)?
+        };
+
+        inits.extend(quote_spanned! { field.span() =>
+            #ident: #expr,
+        });
+    }
+
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics ::zvec::FromDoc for #name #ty_generics #where_clause {
+            fn from_doc(__doc: ::zvec::DocRef<'_>) -> ::zvec::Result<Self> {
+                Ok(Self {
+                    #inits
+                })
+            }
+        }
+    })
+}
+
+fn field_reader(field: &Field, hint: &TypeHint, name: &LitStr) -> syn::Result<TokenStream2> {
+    let ty = &field.ty;
+    let span = field.span();
+
+    // Option<T>: tolerate missing-or-null fields by returning None.
+    // Otherwise, delegate to the inner type's reader.
+    if let Some(inner) = option_inner(ty) {
+        // Option<String> is special: DocRef::get_string already returns
+        // Result<Option<String>>, but we still guard on has_field +
+        // is_field_null so zvec never sees a lookup on a null.
+        if matches_named(inner, "String") && matches!(hint, TypeHint::Auto) {
+            return Ok(quote_spanned! { span =>
+                {
+                    if !__doc.has_field(#name) || __doc.is_field_null(#name) {
+                        ::core::option::Option::None
+                    } else {
+                        __doc.get_string(#name)?
+                    }
+                }
+            });
+        }
+        let inner_reader = scalar_or_hinted_reader(inner, hint, name, span)?;
+        return Ok(quote_spanned! { span =>
+            {
+                if !__doc.has_field(#name) || __doc.is_field_null(#name) {
+                    ::core::option::Option::None
+                } else {
+                    ::core::option::Option::Some(#inner_reader)
+                }
+            }
+        });
+    }
+
+    // Non-Option: required. String is special (Result<Option<String>>
+    // needs an outer unwrap).
+    if matches_named(ty, "String") && matches!(hint, TypeHint::Auto) {
+        let err_msg = LitStr::new(&format!("doc is missing field `{}`", name.value()), span);
+        return Ok(quote_spanned! { span =>
+            __doc.get_string(#name)?.ok_or_else(|| {
+                ::zvec::ZvecError::with_message(
+                    ::zvec::ErrorCode::InvalidArgument,
+                    #err_msg,
+                )
+            })?
+        });
+    }
+
+    scalar_or_hinted_reader(ty, hint, name, span)
+}
+
+fn scalar_or_hinted_reader(
+    ty: &Type,
+    hint: &TypeHint,
+    name: &LitStr,
+    span: proc_macro2::Span,
+) -> syn::Result<TokenStream2> {
+    match hint {
+        TypeHint::Binary => {
+            return Ok(quote_spanned! { span => __doc.get_binary(#name)? });
+        }
+        TypeHint::VectorFp32 => {
+            return Ok(quote_spanned! { span => __doc.get_vector_fp32(#name)? });
+        }
+        TypeHint::VectorFp64 => {
+            return Ok(quote_spanned! { span => __doc.get_vector_fp64(#name)? });
+        }
+        TypeHint::VectorInt8 => {
+            return Ok(quote_spanned! { span => __doc.get_vector_int8(#name)? });
+        }
+        TypeHint::VectorInt16 => {
+            return Ok(quote_spanned! { span => __doc.get_vector_int16(#name)? });
+        }
+        TypeHint::Auto => {}
+    }
+
+    let last = match ty {
+        Type::Path(p) => p.path.segments.last(),
+        _ => None,
+    };
+    let Some(last) = last else {
+        return Err(syn::Error::new(
+            span,
+            "unsupported field type for FromDoc; add a #[zvec(...)] type hint",
+        ));
+    };
+    let tok = match last.ident.to_string().as_str() {
+        "String" => {
+            let err_msg = LitStr::new(&format!("doc is missing field `{}`", name.value()), span);
+            quote!(__doc.get_string(#name)?.ok_or_else(|| {
+                ::zvec::ZvecError::with_message(
+                    ::zvec::ErrorCode::InvalidArgument,
+                    #err_msg,
+                )
+            })?)
+        }
+        "bool" => quote!(__doc.get_bool(#name)?),
+        "i32" => quote!(__doc.get_int32(#name)?),
+        "i64" => quote!(__doc.get_int64(#name)?),
+        "u32" => quote!(__doc.get_uint32(#name)?),
+        "u64" => quote!(__doc.get_uint64(#name)?),
+        "f32" => quote!(__doc.get_float(#name)?),
+        "f64" => quote!(__doc.get_double(#name)?),
+        other => {
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "unsupported field type `{other}` for FromDoc; \
+                     add a #[zvec(...)] type hint or extend the derive",
+                ),
+            ));
+        }
+    };
+    Ok(quote_spanned! { span => #tok })
+}
+
+fn matches_named(ty: &Type, wanted: &str) -> bool {
+    let Type::Path(p) = ty else { return false };
+    let Some(seg) = p.path.segments.last() else {
+        return false;
+    };
+    seg.ident == wanted
 }
 
 fn option_inner(ty: &Type) -> Option<&Type> {

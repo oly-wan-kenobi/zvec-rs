@@ -136,6 +136,7 @@ mod config;
 mod doc;
 mod error;
 mod ffi_util;
+mod from_doc;
 mod hybrid;
 mod index_params;
 mod into_doc;
@@ -158,6 +159,7 @@ pub use collection::{Collection, DocSet, WriteResult, WriteSummary};
 pub use config::{initialize, is_initialized, shutdown, Config, LogConfig};
 pub use doc::{Doc, DocRef};
 pub use error::{clear_last_error, ErrorCode, Result, ZvecError};
+pub use from_doc::FromDoc;
 pub use hybrid::HybridSearch;
 pub use index_params::IndexParams;
 pub use into_doc::IntoDoc;
@@ -169,9 +171,9 @@ pub use stats::CollectionStats;
 pub use types::{DataType, DocOperator, IndexType, LogLevel, LogType, MetricType, QuantizeType};
 pub use version::{check_version, version, version_major, version_minor, version_patch};
 
-/// Re-export of the `IntoDoc` derive macro from the `zvec-derive` crate.
+/// Re-exports of the derive macros from the `zvec-derive` crate.
 ///
 /// Available with the `derive` cargo feature.
 #[cfg(feature = "derive")]
 #[cfg_attr(docsrs, doc(cfg(feature = "derive")))]
-pub use zvec_derive::IntoDoc;
+pub use zvec_derive::{FromDoc, IntoDoc};
