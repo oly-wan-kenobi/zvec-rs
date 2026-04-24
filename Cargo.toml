@@ -26,8 +26,12 @@ pkg-config = ["dep:pkg-config"]
 # falls back to the regular `ZVEC_LIB_DIR` / `ZVEC_ROOT` / `pkg-config`
 # discovery flow.
 bundled = ["dep:ureq", "dep:zip", "dep:sha2"]
+# JSON <-> Doc bridge: `Doc::from_json(&serde_json::Value, &CollectionSchema)`.
+# Pulls in `serde_json` as a runtime dependency.
+serde-json = ["dep:serde_json"]
 
 [dependencies]
+serde_json = { version = "1", optional = true }
 
 [build-dependencies]
 bindgen = "0.70"
