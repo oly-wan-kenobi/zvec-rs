@@ -422,11 +422,12 @@ fn field_reader(field: &Field, hint: &TypeHint, name: &LitStr) -> syn::Result<To
     // Non-Option: required. String is special (Result<Option<String>>
     // needs an outer unwrap).
     if matches_named(ty, "String") && matches!(hint, TypeHint::Auto) {
+        let err_msg = LitStr::new(&format!("doc is missing field `{}`", name.value()), span);
         return Ok(quote_spanned! { span =>
             __doc.get_string(#name)?.ok_or_else(|| {
                 ::zvec::ZvecError::with_message(
                     ::zvec::ErrorCode::InvalidArgument,
-                    ::std::format!("doc is missing field `{}`", #name),
+                    #err_msg,
                 )
             })?
         });
@@ -471,12 +472,15 @@ fn scalar_or_hinted_reader(
         ));
     };
     let tok = match last.ident.to_string().as_str() {
-        "String" => quote!(__doc.get_string(#name)?.ok_or_else(|| {
-            ::zvec::ZvecError::with_message(
-                ::zvec::ErrorCode::InvalidArgument,
-                ::std::format!("doc is missing field `{}`", #name),
-            )
-        })?),
+        "String" => {
+            let err_msg = LitStr::new(&format!("doc is missing field `{}`", name.value()), span);
+            quote!(__doc.get_string(#name)?.ok_or_else(|| {
+                ::zvec::ZvecError::with_message(
+                    ::zvec::ErrorCode::InvalidArgument,
+                    #err_msg,
+                )
+            })?)
+        }
         "bool" => quote!(__doc.get_bool(#name)?),
         "i32" => quote!(__doc.get_int32(#name)?),
         "i64" => quote!(__doc.get_int64(#name)?),
