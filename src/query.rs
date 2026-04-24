@@ -75,6 +75,17 @@ impl VectorQuery {
         self.set_query_vector_raw(slice_as_bytes(vec))
     }
 
+    /// Set a half-precision query vector directly from `&[half::f16]`.
+    ///
+    /// Available with the `half` cargo feature.
+    #[cfg(feature = "half")]
+    pub fn set_query_vector_fp16(&mut self, vec: &[half::f16]) -> Result<()> {
+        // SAFETY: `half::f16` is `#[repr(transparent)]` over `u16`.
+        let bits: &[u16] =
+            unsafe { core::slice::from_raw_parts(vec.as_ptr() as *const u16, vec.len()) };
+        self.set_query_vector_raw(slice_as_bytes(bits))
+    }
+
     pub fn filter(&self) -> Option<String> {
         unsafe { cstr_to_string(sys::zvec_vector_query_get_filter(self.as_ptr())) }
     }

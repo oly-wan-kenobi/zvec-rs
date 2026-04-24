@@ -165,6 +165,19 @@ impl Doc {
         self.add_field_raw(field_name, DataType::VectorFp16, slice_as_bytes(vector))
     }
 
+    /// Add an FP16 vector field directly from a slice of `half::f16`.
+    ///
+    /// Available with the `half` cargo feature.
+    #[cfg(feature = "half")]
+    pub fn add_vector_fp16(&mut self, field_name: &str, vector: &[half::f16]) -> Result<()> {
+        // SAFETY: `half::f16` is `#[repr(transparent)]` over `u16` — see the
+        // `half` crate docs — so a `&[half::f16]` is bitwise a `&[u16]` of
+        // the same length.
+        let bits: &[u16] =
+            unsafe { core::slice::from_raw_parts(vector.as_ptr() as *const u16, vector.len()) };
+        self.add_vector_fp16_bits(field_name, bits)
+    }
+
     /// Add an INT4 vector field. INT4 is nibble-packed — two values per byte
     /// — and zvec expects the caller to hand it pre-packed bytes.
     pub fn add_vector_int4_packed(&mut self, field_name: &str, packed: &[u8]) -> Result<()> {
@@ -563,6 +576,18 @@ impl<'a> DocRef<'a> {
             out.push(u16::from_ne_bytes(chunk.try_into().unwrap()));
         }
         Ok(out)
+    }
+
+    /// Retrieve an FP16 vector field as `Vec<half::f16>`.
+    ///
+    /// Available with the `half` cargo feature.
+    #[cfg(feature = "half")]
+    pub fn get_vector_fp16(&self, name: &str) -> Result<Vec<half::f16>> {
+        Ok(self
+            .get_vector_fp16_bits(name)?
+            .into_iter()
+            .map(half::f16::from_bits)
+            .collect())
     }
 
     /// Retrieve a nibble-packed INT4 vector field as raw bytes (2 values per
