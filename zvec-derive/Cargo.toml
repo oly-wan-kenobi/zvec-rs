@@ -1,0 +1,16 @@
+[package]
+name = "zvec-derive"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Derive macros for the `zvec` crate (e.g. #[derive(IntoDoc)])."
+repository = "https://github.com/oly-wan-kenobi/zvec-rs"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

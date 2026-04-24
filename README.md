@@ -258,6 +258,22 @@ root.
   `add_vector_int8`, `add_vector_fp16_bits`, `add_vector_int4_packed`,
   `add_vector_binary32`, `add_array_int32`, …) and matching `get_*`
   readers; `serialize` / `deserialize` / `validate` / `to_detail_string`.
+- `zvec::IntoDoc` trait + `#[derive(IntoDoc)]` (via the `derive`
+  feature) — turn a user struct into a `Doc` without calling each
+  `add_*` by hand:
+  ```rust
+  #[derive(IntoDoc)]
+  struct Article {
+      #[zvec(pk)] id: String,
+      title: String,
+      #[zvec(vector_fp32)] embedding: Vec<f32>,
+  }
+  let doc = article.into_doc()?;
+  ```
+  Attributes: `pk`, `skip`, `rename = "..."`, plus type hints for
+  `Vec`-typed fields (`binary`, `vector_fp32`, `vector_fp64`,
+  `vector_int8`, `vector_int16`). `Option<T>` is supported — `None`
+  writes a null field via `Doc::set_field_null`.
 - `zvec::{DataType, IndexType, MetricType, QuantizeType, LogLevel,
   LogType, DocOperator}` — strongly-typed mirrors of the C `typedef`s and
   `#define`s, with an `Other(u32)` escape hatch for values not recognised
