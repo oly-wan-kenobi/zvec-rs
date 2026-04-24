@@ -169,3 +169,50 @@ fn schema_introspection() -> zvec::Result<()> {
     assert!(names.contains(&"embedding".to_string()));
     Ok(())
 }
+
+#[test]
+fn hybrid_search_fuses_two_queries() -> zvec::Result<()> {
+    use zvec::HybridSearch;
+
+    let path = tmp_path("hybrid");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    for (pk, v) in [
+        ("a", [1.0, 0.0, 0.0]),
+        ("b", [0.0, 1.0, 0.0]),
+        ("c", [0.0, 0.0, 1.0]),
+    ] {
+        let mut d = Doc::new()?;
+        d.set_pk(pk)?;
+        d.add_string("id", pk)?;
+        d.add_vector_fp32("embedding", &v)?;
+        collection.insert(&[&d])?;
+    }
+    collection.flush()?;
+
+    let mut q1 = VectorQuery::new()?;
+    q1.set_field_name("embedding")?;
+    q1.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q1.set_topk(3)?;
+
+    let mut q2 = VectorQuery::new()?;
+    q2.set_field_name("embedding")?;
+    q2.set_query_vector_fp32(&[0.0, 1.0, 0.0])?;
+    q2.set_topk(3)?;
+
+    let hits = HybridSearch::new()
+        .query(q1)
+        .query(q2)
+        .top_k(2)
+        .execute(&collection)?;
+
+    // The top-2 RRF-fused hits should be `a` and `b` (each ranks #1 in
+    // exactly one query); `c` should not appear in the top 2.
+    assert_eq!(hits.len(), 2);
+    let pks: Vec<_> = hits.iter().map(|h| h.pk.as_str()).collect();
+    assert!(pks.contains(&"a"));
+    assert!(pks.contains(&"b"));
+    assert!(!pks.contains(&"c"));
+    Ok(())
+}

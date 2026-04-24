@@ -48,6 +48,19 @@ path = "examples/version.rs"
 name = "basic"
 path = "examples/basic.rs"
 
+[[example]]
+name = "semantic_search"
+path = "examples/semantic_search.rs"
+
+[[example]]
+name = "hybrid_search"
+path = "examples/hybrid_search.rs"
+
+[[example]]
+name = "json_ingest"
+path = "examples/json_ingest.rs"
+required-features = ["serde-json"]
+
 [package.metadata.docs.rs]
 # docs.rs has no zvec library installed, so we skip linking entirely and
 # only emit the FFI declarations.
