@@ -117,6 +117,45 @@ fn delete_then_query_empty() -> zvec::Result<()> {
 }
 
 #[test]
+fn insert_iter_batches_correctly() -> zvec::Result<()> {
+    let path = tmp_path("insert_iter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    // 7 docs in batches of 3 → 3 + 3 + 1.
+    let docs = (0..7).map(|i| {
+        let mut d = Doc::new().unwrap();
+        let pk = format!("d{i}");
+        d.set_pk(&pk).unwrap();
+        d.add_string("id", &pk).unwrap();
+        d.add_vector_fp32("embedding", &[i as f32, 0.0, 0.0])
+            .unwrap();
+        d
+    });
+    let summary = collection.insert_iter(docs, 3)?;
+    assert_eq!(summary.success, 7);
+    assert_eq!(summary.error, 0);
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 7);
+
+    // Upsert variant: 3 fresh docs, batch size > input length.
+    let more = (7..10).map(|i| {
+        let mut d = Doc::new().unwrap();
+        let pk = format!("d{i}");
+        d.set_pk(&pk).unwrap();
+        d.add_string("id", &pk).unwrap();
+        d.add_vector_fp32("embedding", &[i as f32, 0.0, 0.0])
+            .unwrap();
+        d
+    });
+    let summary = collection.upsert_iter(more, 100)?;
+    assert_eq!(summary.success, 3);
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 10);
+    Ok(())
+}
+
+#[test]
 fn schema_introspection() -> zvec::Result<()> {
     let schema = basic_schema()?;
     assert_eq!(schema.name().as_deref(), Some("it_collection"));
