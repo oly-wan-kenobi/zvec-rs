@@ -31,6 +31,7 @@ tag `scripts/build-zvec.sh` checks out by default.
 - [API tour](#api-tour)
 - [Thread safety](#thread-safety)
 - [Running the examples and tests](#running-the-examples-and-tests)
+- [Cookbook](#cookbook)
 - [Comparison to `igobypenn/zvec-rust-binding`](#comparison-to-igobypennzvec-rust-binding)
 - [Repository layout](#repository-layout)
 - [Contributing](#contributing)
@@ -249,6 +250,9 @@ root.
   a query via `VectorQuery::set_*_params`.
 - `zvec::{VectorQuery, GroupByVectorQuery}` — all fields/knobs from the C
   API, plus `set_query_vector_fp32` / `_fp64` for typed vector inputs.
+- `zvec::HybridSearch` — runs N `VectorQuery`s and fuses the result
+  lists with [`zvec::rerank::RrfReRanker`] (default) or
+  [`zvec::rerank::WeightedReRanker`]. Cookbook example below.
 - `zvec::Doc` (+ non-owning `DocRef<'_>`) — primary key and per-field
   setters (`add_string`, `add_float`, `add_vector_fp32`,
   `add_vector_int8`, `add_vector_fp16_bits`, `add_vector_int4_packed`,
@@ -301,6 +305,59 @@ All three need `libzvec_c_api` available — either via `--features bundled`,
 `ZVEC_ROOT` pointing at a source build, or an external install. With
 `--features bundled` the resulting binary has an rpath baked in and needs
 no runtime env vars.
+
+---
+
+## Cookbook
+
+End-to-end recipes you can `cargo run` directly. All assume
+`--features bundled` (or one of the install paths above) and live under
+[`examples/`](examples/).
+
+### Semantic search
+
+[`examples/semantic_search.rs`](examples/semantic_search.rs) — index a
+small corpus of text + 4-D embeddings, then query nearest neighbours by
+cosine similarity.
+
+```sh
+cargo run --example semantic_search --features bundled
+```
+
+### Hybrid search across multiple embeddings
+
+[`examples/hybrid_search.rs`](examples/hybrid_search.rs) — every doc
+carries a `title_emb` and a `body_emb`; a query against each is fused
+with Reciprocal Rank Fusion via [`HybridSearch`](src/hybrid.rs).
+
+```rust
+let hits = HybridSearch::new()
+    .query(title_q)
+    .query(body_q)
+    .top_k(10)
+    .execute(&collection)?;
+```
+
+```sh
+cargo run --example hybrid_search --features bundled
+```
+
+### JSON ingestion
+
+[`examples/json_ingest.rs`](examples/json_ingest.rs) — feed
+`serde_json::Value`s straight into the collection through
+`Doc::from_json`. Field types are resolved through the schema so the
+caller doesn't manually pick `add_string` vs `add_vector_fp32`.
+
+```sh
+cargo run --example json_ingest --features "bundled serde-json"
+```
+
+### Manual rerank
+
+`zvec::rerank::{RrfReRanker, WeightedReRanker}` are usable
+stand-alone — pass any `Vec<Hit>` you produce, from any source, not
+just `Collection::query`.
 
 ---
 
