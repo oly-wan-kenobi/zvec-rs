@@ -69,14 +69,9 @@ impl LogConfig {
     }
 
     fn from_ptr(ptr: *mut sys::zvec_log_config_t, ctx: &'static str) -> Result<Self> {
-        NonNull::new(ptr)
-            .map(|ptr| Self { ptr })
-            .ok_or_else(|| {
-                ZvecError::with_message(
-                    ErrorCode::ResourceExhausted,
-                    format!("{ctx} returned NULL"),
-                )
-            })
+        NonNull::new(ptr).map(|ptr| Self { ptr }).ok_or_else(|| {
+            ZvecError::with_message(ErrorCode::ResourceExhausted, format!("{ctx} returned NULL"))
+        })
     }
 
     pub fn level(&self) -> LogLevel {
@@ -138,6 +133,11 @@ impl Drop for LogConfig {
         unsafe { sys::zvec_config_log_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: LogConfig is a plain config builder. All mutating methods require
+// `&mut self`, and the underlying C object has no hidden shared state.
+unsafe impl Send for LogConfig {}
+unsafe impl Sync for LogConfig {}
 
 // -----------------------------------------------------------------------------
 // Config (global runtime configuration)
@@ -225,3 +225,7 @@ impl Drop for Config {
         unsafe { sys::zvec_config_data_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: see `LogConfig` justification.
+unsafe impl Send for Config {}
+unsafe impl Sync for Config {}

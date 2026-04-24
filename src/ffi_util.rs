@@ -3,7 +3,17 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-use crate::error::{Result, ZvecError, ErrorCode};
+use crate::error::{ErrorCode, Result, ZvecError};
+
+/// Reinterpret a `&[T]` as `&[u8]` for passing to the zvec C API. The caller
+/// guarantees `T` has no padding bytes — only primitives like `f32`, `i64`,
+/// etc. are used here.
+#[inline]
+pub(crate) fn slice_as_bytes<T: Copy>(s: &[T]) -> &[u8] {
+    // SAFETY: T: Copy + primitive-sized; all bit patterns are valid for the
+    // u8 view and lifetime is tied to `s`.
+    unsafe { core::slice::from_raw_parts(s.as_ptr() as *const u8, core::mem::size_of_val(s)) }
+}
 
 /// Convert a Rust string to a heap-allocated `CString`. Returns an error if
 /// the string contains an interior NUL byte.

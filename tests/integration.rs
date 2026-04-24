@@ -13,11 +13,7 @@ use zvec::{
 
 fn tmp_path(name: &str) -> String {
     let mut p: PathBuf = std::env::temp_dir();
-    p.push(format!(
-        "zvec_rs_test_{}_{}",
-        name,
-        std::process::id(),
-    ));
+    p.push(format!("zvec_rs_test_{}_{}", name, std::process::id(),));
     let _ = std::fs::remove_dir_all(&p);
     p.to_string_lossy().to_string()
 }

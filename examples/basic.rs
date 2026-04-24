@@ -55,7 +55,10 @@ fn main() -> zvec::Result<()> {
     d2.add_vector_fp32("embedding", &[0.4, 0.5, 0.6])?;
 
     let summary = collection.insert(&[&d1, &d2])?;
-    println!("[ok] inserted: success={}, error={}", summary.success, summary.error);
+    println!(
+        "[ok] inserted: success={}, error={}",
+        summary.success, summary.error
+    );
 
     collection.flush()?;
     println!("[ok] flushed");

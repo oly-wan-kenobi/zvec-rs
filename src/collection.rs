@@ -173,7 +173,10 @@ impl Collection {
         let mut out: *mut sys::zvec_collection_stats_t = core::ptr::null_mut();
         check(unsafe { sys::zvec_collection_get_stats(self.as_ptr(), &mut out) })?;
         CollectionStats::from_raw(out).ok_or_else(|| {
-            ZvecError::with_message(ErrorCode::Internal, "zvec_collection_get_stats returned NULL")
+            ZvecError::with_message(
+                ErrorCode::Internal,
+                "zvec_collection_get_stats returned NULL",
+            )
         })
     }
 
@@ -196,17 +199,11 @@ impl Collection {
             Some(e) => Some(cstring(e)?),
             None => None,
         };
-        let expr_ptr = expr_c
-            .as_ref()
-            .map_or(core::ptr::null(), |c| c.as_ptr());
+        let expr_ptr = expr_c.as_ref().map_or(core::ptr::null(), |c| c.as_ptr());
         // The field pointer needs to be `const zvec_field_schema_t*`; our
         // wrapper exposes such a borrow via as_ptr().
         check(unsafe {
-            sys::zvec_collection_add_column(
-                self.ptr.as_ptr(),
-                field.as_ptr() as *const _,
-                expr_ptr,
-            )
+            sys::zvec_collection_add_column(self.ptr.as_ptr(), field.as_ptr() as *const _, expr_ptr)
         })
     }
 
@@ -399,7 +396,10 @@ impl Collection {
         check(unsafe {
             sys::zvec_collection_query(self.as_ptr(), query.as_ptr(), &mut results, &mut count)
         })?;
-        Ok(DocSet { ptr: results, len: count })
+        Ok(DocSet {
+            ptr: results,
+            len: count,
+        })
     }
 
     pub fn fetch(&self, pks: &[&str]) -> Result<DocSet> {
@@ -417,7 +417,10 @@ impl Collection {
         };
         drop(keep);
         check(rc)?;
-        Ok(DocSet { ptr: results, len: count })
+        Ok(DocSet {
+            ptr: results,
+            len: count,
+        })
     }
 }
 
@@ -428,3 +431,17 @@ impl Drop for Collection {
         unsafe { sys::zvec_collection_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: A `Collection` is an in-process handle wrapping a
+// `std::shared_ptr<zvec::Collection>`. zvec is documented as an embedded
+// engine usable from multiple threads; all of our mutating APIs (insert /
+// update / delete / flush / optimize) go through the C API, which is
+// responsible for its own synchronisation.
+unsafe impl Send for Collection {}
+unsafe impl Sync for Collection {}
+
+// SAFETY: A `DocSet` owns a zvec-allocated array of non-null document
+// pointers. Sending to another thread is fine. We do not implement `Sync`
+// because `zvec_docs_free` runs in `Drop` and the underlying documents are
+// accessed by pointer.
+unsafe impl Send for DocSet {}

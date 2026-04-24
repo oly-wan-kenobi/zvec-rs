@@ -51,3 +51,8 @@ impl Drop for CollectionStats {
         unsafe { sys::zvec_collection_stats_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: CollectionStats is a read-only snapshot produced by
+// `Collection::stats`; it exposes no mutators.
+unsafe impl Send for CollectionStats {}
+unsafe impl Sync for CollectionStats {}

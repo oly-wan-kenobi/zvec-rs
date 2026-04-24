@@ -55,3 +55,7 @@ impl Drop for CollectionOptions {
         unsafe { sys::zvec_collection_options_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: plain options builder; mutation requires `&mut self`.
+unsafe impl Send for CollectionOptions {}
+unsafe impl Sync for CollectionOptions {}

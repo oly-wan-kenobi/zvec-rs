@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::error::{check, ErrorCode, Result, ZvecError};
-use crate::ffi_util::{cstr_as_str, cstr_to_string, cstring};
+use crate::ffi_util::{cstr_as_str, cstr_to_string, cstring, slice_as_bytes};
 use crate::schema::CollectionSchema;
 use crate::sys;
 use crate::types::{DataType, DocOperator};
@@ -22,7 +22,10 @@ impl Doc {
     pub fn new() -> Result<Self> {
         let ptr = unsafe { sys::zvec_doc_create() };
         NonNull::new(ptr).map(|ptr| Self { ptr }).ok_or_else(|| {
-            ZvecError::with_message(ErrorCode::ResourceExhausted, "zvec_doc_create returned NULL")
+            ZvecError::with_message(
+                ErrorCode::ResourceExhausted,
+                "zvec_doc_create returned NULL",
+            )
         })
     }
 
@@ -138,30 +141,74 @@ impl Doc {
     }
 
     pub fn add_vector_fp32(&mut self, field_name: &str, vector: &[f32]) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                vector.as_ptr() as *const u8,
-                vector.len() * core::mem::size_of::<f32>(),
-            )
-        };
-        self.add_field_raw(field_name, DataType::VectorFp32, bytes)
+        self.add_field_raw(field_name, DataType::VectorFp32, slice_as_bytes(vector))
     }
 
     pub fn add_vector_fp64(&mut self, field_name: &str, vector: &[f64]) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                vector.as_ptr() as *const u8,
-                vector.len() * core::mem::size_of::<f64>(),
-            )
-        };
-        self.add_field_raw(field_name, DataType::VectorFp64, bytes)
+        self.add_field_raw(field_name, DataType::VectorFp64, slice_as_bytes(vector))
     }
 
     pub fn add_vector_int8(&mut self, field_name: &str, vector: &[i8]) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(vector.as_ptr() as *const u8, vector.len())
-        };
-        self.add_field_raw(field_name, DataType::VectorInt8, bytes)
+        self.add_field_raw(field_name, DataType::VectorInt8, slice_as_bytes(vector))
+    }
+
+    /// Add an INT16 vector field. Values are stored as-is in native byte
+    /// order.
+    pub fn add_vector_int16(&mut self, field_name: &str, vector: &[i16]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::VectorInt16, slice_as_bytes(vector))
+    }
+
+    /// Add an FP16 vector field. Each `u16` is the raw bit pattern of an
+    /// IEEE-754 half-precision float, as zvec's C API accepts them; pair with
+    /// a crate like `half` to produce them from `f32`.
+    pub fn add_vector_fp16_bits(&mut self, field_name: &str, vector: &[u16]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::VectorFp16, slice_as_bytes(vector))
+    }
+
+    /// Add an INT4 vector field. INT4 is nibble-packed — two values per byte
+    /// — and zvec expects the caller to hand it pre-packed bytes.
+    pub fn add_vector_int4_packed(&mut self, field_name: &str, packed: &[u8]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::VectorInt4, packed)
+    }
+
+    /// Add a binary32 vector field (bit-packed, 32 bits per word).
+    pub fn add_vector_binary32(&mut self, field_name: &str, words: &[u32]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::VectorBinary32, slice_as_bytes(words))
+    }
+
+    /// Add a binary64 vector field (bit-packed, 64 bits per word).
+    pub fn add_vector_binary64(&mut self, field_name: &str, words: &[u64]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::VectorBinary64, slice_as_bytes(words))
+    }
+
+    /// Add an `array<int32>` field.
+    pub fn add_array_int32(&mut self, field_name: &str, values: &[i32]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::ArrayInt32, slice_as_bytes(values))
+    }
+
+    /// Add an `array<int64>` field.
+    pub fn add_array_int64(&mut self, field_name: &str, values: &[i64]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::ArrayInt64, slice_as_bytes(values))
+    }
+
+    /// Add an `array<uint32>` field.
+    pub fn add_array_uint32(&mut self, field_name: &str, values: &[u32]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::ArrayUInt32, slice_as_bytes(values))
+    }
+
+    /// Add an `array<uint64>` field.
+    pub fn add_array_uint64(&mut self, field_name: &str, values: &[u64]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::ArrayUInt64, slice_as_bytes(values))
+    }
+
+    /// Add an `array<float>` field.
+    pub fn add_array_float(&mut self, field_name: &str, values: &[f32]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::ArrayFloat, slice_as_bytes(values))
+    }
+
+    /// Add an `array<double>` field.
+    pub fn add_array_double(&mut self, field_name: &str, values: &[f64]) -> Result<()> {
+        self.add_field_raw(field_name, DataType::ArrayDouble, slice_as_bytes(values))
     }
 
     pub fn remove_field(&mut self, field_name: &str) -> Result<()> {
@@ -233,17 +280,39 @@ impl Doc {
     }
 
     // Forward reads to DocRef.
-    pub fn pk(&self) -> Option<String> { self.borrow().pk_copy() }
-    pub fn doc_id(&self) -> u64 { self.borrow().doc_id() }
-    pub fn score(&self) -> f32 { self.borrow().score() }
-    pub fn operator(&self) -> DocOperator { self.borrow().operator() }
-    pub fn field_count(&self) -> usize { self.borrow().field_count() }
-    pub fn is_empty(&self) -> bool { self.borrow().is_empty() }
-    pub fn has_field(&self, name: &str) -> bool { self.borrow().has_field(name) }
-    pub fn has_field_value(&self, name: &str) -> bool { self.borrow().has_field_value(name) }
-    pub fn is_field_null(&self, name: &str) -> bool { self.borrow().is_field_null(name) }
-    pub fn memory_usage(&self) -> usize { self.borrow().memory_usage() }
-    pub fn field_names(&self) -> Result<Vec<String>> { self.borrow().field_names() }
+    pub fn pk(&self) -> Option<String> {
+        self.borrow().pk_copy()
+    }
+    pub fn doc_id(&self) -> u64 {
+        self.borrow().doc_id()
+    }
+    pub fn score(&self) -> f32 {
+        self.borrow().score()
+    }
+    pub fn operator(&self) -> DocOperator {
+        self.borrow().operator()
+    }
+    pub fn field_count(&self) -> usize {
+        self.borrow().field_count()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.borrow().is_empty()
+    }
+    pub fn has_field(&self, name: &str) -> bool {
+        self.borrow().has_field(name)
+    }
+    pub fn has_field_value(&self, name: &str) -> bool {
+        self.borrow().has_field_value(name)
+    }
+    pub fn is_field_null(&self, name: &str) -> bool {
+        self.borrow().is_field_null(name)
+    }
+    pub fn memory_usage(&self) -> usize {
+        self.borrow().memory_usage()
+    }
+    pub fn field_names(&self) -> Result<Vec<String>> {
+        self.borrow().field_names()
+    }
 
     pub fn get_vector_fp32(&self, field_name: &str) -> Result<Vec<f32>> {
         self.borrow().get_vector_fp32(field_name)
@@ -265,6 +334,13 @@ impl Drop for Doc {
     }
 }
 
+// SAFETY: A `Doc` owns its underlying C object exclusively. Sending across
+// threads is fine. We deliberately do NOT impl `Sync`: zvec's doc mutators
+// (`zvec_doc_add_field_*`, `zvec_doc_set_pk`, etc.) are not documented as
+// thread-safe, and Rust's `&self` accessors on `DocRef` could otherwise run
+// concurrently with those mutators through aliased pointers.
+unsafe impl Send for Doc {}
+
 /// Non-owning document reference (e.g. rows returned from a query).
 #[derive(Clone, Copy)]
 pub struct DocRef<'a> {
@@ -274,7 +350,10 @@ pub struct DocRef<'a> {
 
 impl<'a> DocRef<'a> {
     pub(crate) fn from_ptr(ptr: *mut sys::zvec_doc_t) -> Option<Self> {
-        NonNull::new(ptr).map(|ptr| Self { ptr, _marker: PhantomData })
+        NonNull::new(ptr).map(|ptr| Self {
+            ptr,
+            _marker: PhantomData,
+        })
     }
 
     fn raw(self) -> *const sys::zvec_doc_t {
@@ -368,12 +447,24 @@ impl<'a> DocRef<'a> {
         Ok(unsafe { out.assume_init() })
     }
 
-    pub fn get_int32(&self, name: &str) -> Result<i32> { self.get_basic(name, DataType::Int32) }
-    pub fn get_int64(&self, name: &str) -> Result<i64> { self.get_basic(name, DataType::Int64) }
-    pub fn get_uint32(&self, name: &str) -> Result<u32> { self.get_basic(name, DataType::UInt32) }
-    pub fn get_uint64(&self, name: &str) -> Result<u64> { self.get_basic(name, DataType::UInt64) }
-    pub fn get_float(&self, name: &str) -> Result<f32> { self.get_basic(name, DataType::Float) }
-    pub fn get_double(&self, name: &str) -> Result<f64> { self.get_basic(name, DataType::Double) }
+    pub fn get_int32(&self, name: &str) -> Result<i32> {
+        self.get_basic(name, DataType::Int32)
+    }
+    pub fn get_int64(&self, name: &str) -> Result<i64> {
+        self.get_basic(name, DataType::Int64)
+    }
+    pub fn get_uint32(&self, name: &str) -> Result<u32> {
+        self.get_basic(name, DataType::UInt32)
+    }
+    pub fn get_uint64(&self, name: &str) -> Result<u64> {
+        self.get_basic(name, DataType::UInt64)
+    }
+    pub fn get_float(&self, name: &str) -> Result<f32> {
+        self.get_basic(name, DataType::Float)
+    }
+    pub fn get_double(&self, name: &str) -> Result<f64> {
+        self.get_basic(name, DataType::Double)
+    }
     pub fn get_bool(&self, name: &str) -> Result<bool> {
         let v: u8 = self.get_basic(name, DataType::Bool)?;
         Ok(v != 0)
@@ -447,4 +538,118 @@ impl<'a> DocRef<'a> {
         }
         Ok(out)
     }
+
+    /// Retrieve an INT8 vector field.
+    pub fn get_vector_int8(&self, name: &str) -> Result<Vec<i8>> {
+        let bytes = self.get_copy(name, DataType::VectorInt8)?;
+        Ok(bytes.into_iter().map(|b| b as i8).collect())
+    }
+
+    /// Retrieve an INT16 vector field.
+    pub fn get_vector_int16(&self, name: &str) -> Result<Vec<i16>> {
+        let bytes = self.get_copy(name, DataType::VectorInt16)?;
+        let mut out = Vec::with_capacity(bytes.len() / 2);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<i16>()) {
+            out.push(i16::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    /// Retrieve an FP16 vector field as its raw 16-bit bit patterns.
+    pub fn get_vector_fp16_bits(&self, name: &str) -> Result<Vec<u16>> {
+        let bytes = self.get_copy(name, DataType::VectorFp16)?;
+        let mut out = Vec::with_capacity(bytes.len() / 2);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<u16>()) {
+            out.push(u16::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    /// Retrieve a nibble-packed INT4 vector field as raw bytes (2 values per
+    /// byte).
+    pub fn get_vector_int4_packed(&self, name: &str) -> Result<Vec<u8>> {
+        self.get_copy(name, DataType::VectorInt4)
+    }
+
+    pub fn get_vector_binary32(&self, name: &str) -> Result<Vec<u32>> {
+        let bytes = self.get_copy(name, DataType::VectorBinary32)?;
+        let mut out = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<u32>()) {
+            out.push(u32::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_vector_binary64(&self, name: &str) -> Result<Vec<u64>> {
+        let bytes = self.get_copy(name, DataType::VectorBinary64)?;
+        let mut out = Vec::with_capacity(bytes.len() / 8);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<u64>()) {
+            out.push(u64::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_array_int32(&self, name: &str) -> Result<Vec<i32>> {
+        let bytes = self.get_copy(name, DataType::ArrayInt32)?;
+        let mut out = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<i32>()) {
+            out.push(i32::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_array_int64(&self, name: &str) -> Result<Vec<i64>> {
+        let bytes = self.get_copy(name, DataType::ArrayInt64)?;
+        let mut out = Vec::with_capacity(bytes.len() / 8);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<i64>()) {
+            out.push(i64::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_array_uint32(&self, name: &str) -> Result<Vec<u32>> {
+        let bytes = self.get_copy(name, DataType::ArrayUInt32)?;
+        let mut out = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<u32>()) {
+            out.push(u32::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_array_uint64(&self, name: &str) -> Result<Vec<u64>> {
+        let bytes = self.get_copy(name, DataType::ArrayUInt64)?;
+        let mut out = Vec::with_capacity(bytes.len() / 8);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<u64>()) {
+            out.push(u64::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_array_float(&self, name: &str) -> Result<Vec<f32>> {
+        let bytes = self.get_copy(name, DataType::ArrayFloat)?;
+        let mut out = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<f32>()) {
+            out.push(f32::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    pub fn get_array_double(&self, name: &str) -> Result<Vec<f64>> {
+        let bytes = self.get_copy(name, DataType::ArrayDouble)?;
+        let mut out = Vec::with_capacity(bytes.len() / 8);
+        for chunk in bytes.chunks_exact(core::mem::size_of::<f64>()) {
+            out.push(f64::from_ne_bytes(chunk.try_into().unwrap()));
+        }
+        Ok(out)
+    }
+
+    /// Retrieve a binary field (opaque bytes). Suitable for `DataType::Binary`.
+    pub fn get_binary(&self, name: &str) -> Result<Vec<u8>> {
+        self.get_copy(name, DataType::Binary)
+    }
 }
+
+// SAFETY: DocRef is a borrowed view whose lifetime is tied to a parent `Doc`
+// or `DocSet`; accessors are `&self` read-only queries.
+unsafe impl Send for DocRef<'_> {}
+unsafe impl Sync for DocRef<'_> {}

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  lint-and-test:
+    name: rustfmt + clippy + tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install libclang (for bindgen)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang unzip
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch prebuilt libzvec_c_api from the zvec wheel
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/zvec-wheel"
+          # Pin to the zvec release whose c_api.h is vendored in this repo.
+          python -m pip download 'zvec==0.3.1' \
+            --no-deps --only-binary=:all: \
+            --dest "$RUNNER_TEMP/zvec-wheel" \
+            --timeout 120
+          unzip -q "$RUNNER_TEMP/zvec-wheel"/zvec-*.whl -d "$RUNNER_TEMP/zvec-wheel/extracted"
+          echo "ZVEC_LIB_DIR=$RUNNER_TEMP/zvec-wheel/extracted/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/zvec-wheel/extracted/lib" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: Build (lib)
+        run: cargo build --verbose
+
+      - name: Clippy
+        run: cargo clippy --all-targets --no-deps -- -D warnings
+
+      - name: Build examples + tests
+        run: cargo build --all-targets --verbose
+
+      - name: Test
+        run: cargo test --verbose
+
+      - name: Run basic example
+        run: cargo run --example basic

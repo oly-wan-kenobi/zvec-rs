@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -14,10 +14,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DOCS_RS");
 
     // Let downstream crates discover the vendored headers.
-    println!(
-        "cargo:include={}",
-        manifest_dir.join("vendor").display()
-    );
+    println!("cargo:include={}", manifest_dir.join("vendor").display());
 
     let header_path = resolve_header(&manifest_dir, &vendor_header);
 
@@ -31,7 +28,7 @@ fn main() {
     configure_link();
 }
 
-fn resolve_header(manifest_dir: &PathBuf, vendor_header: &PathBuf) -> PathBuf {
+fn resolve_header(manifest_dir: &Path, vendor_header: &Path) -> PathBuf {
     // Prefer a user-specified include dir so bindings match their installed lib.
     if let Some(dir) = env::var_os("ZVEC_INCLUDE_DIR") {
         let candidate = PathBuf::from(dir).join("zvec").join("c_api.h");
@@ -55,10 +52,10 @@ fn resolve_header(manifest_dir: &PathBuf, vendor_header: &PathBuf) -> PathBuf {
         vendor_header.display()
     );
     let _ = manifest_dir;
-    vendor_header.clone()
+    vendor_header.to_path_buf()
 }
 
-fn generate_bindings(header: &PathBuf) {
+fn generate_bindings(header: &Path) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let bindings = bindgen::Builder::default()
@@ -88,7 +85,10 @@ fn generate_bindings(header: &PathBuf) {
 fn configure_link() {
     // 1. Explicit ZVEC_LIB_DIR / ZVEC_ROOT takes precedence over everything.
     if let Some(dir) = env::var_os("ZVEC_LIB_DIR") {
-        println!("cargo:rustc-link-search=native={}", PathBuf::from(dir).display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            PathBuf::from(dir).display()
+        );
         emit_link();
         return;
     }

@@ -5,7 +5,7 @@ use std::ffi::CString;
 use std::ptr::NonNull;
 
 use crate::error::{check, ErrorCode, Result, ZvecError};
-use crate::ffi_util::{cstr_to_string, cstring};
+use crate::ffi_util::{cstr_to_string, cstring, slice_as_bytes};
 use crate::query_params::{FlatQueryParams, HnswQueryParams, IvfQueryParams};
 use crate::sys;
 
@@ -68,23 +68,11 @@ impl VectorQuery {
     }
 
     pub fn set_query_vector_fp32(&mut self, vec: &[f32]) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                vec.as_ptr() as *const u8,
-                vec.len() * core::mem::size_of::<f32>(),
-            )
-        };
-        self.set_query_vector_raw(bytes)
+        self.set_query_vector_raw(slice_as_bytes(vec))
     }
 
     pub fn set_query_vector_fp64(&mut self, vec: &[f64]) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                vec.as_ptr() as *const u8,
-                vec.len() * core::mem::size_of::<f64>(),
-            )
-        };
-        self.set_query_vector_raw(bytes)
+        self.set_query_vector_raw(slice_as_bytes(vec))
     }
 
     pub fn filter(&self) -> Option<String> {
@@ -164,6 +152,10 @@ impl Drop for VectorQuery {
     }
 }
 
+// SAFETY: VectorQuery owns its C object exclusively. Sending across threads
+// is safe. Not Sync because setters mutate internal state.
+unsafe impl Send for VectorQuery {}
+
 // -----------------------------------------------------------------------------
 // GroupByVectorQuery
 // -----------------------------------------------------------------------------
@@ -188,7 +180,11 @@ impl GroupByVectorQuery {
     }
 
     pub fn field_name(&self) -> Option<String> {
-        unsafe { cstr_to_string(sys::zvec_group_by_vector_query_get_field_name(self.as_ptr())) }
+        unsafe {
+            cstr_to_string(sys::zvec_group_by_vector_query_get_field_name(
+                self.as_ptr(),
+            ))
+        }
     }
     pub fn set_field_name(&mut self, name: &str) -> Result<()> {
         let c = cstring(name)?;
@@ -199,7 +195,9 @@ impl GroupByVectorQuery {
 
     pub fn group_by_field_name(&self) -> Option<String> {
         unsafe {
-            cstr_to_string(sys::zvec_group_by_vector_query_get_group_by_field_name(self.as_ptr()))
+            cstr_to_string(sys::zvec_group_by_vector_query_get_group_by_field_name(
+                self.as_ptr(),
+            ))
         }
     }
     pub fn set_group_by_field_name(&mut self, name: &str) -> Result<()> {
@@ -234,13 +232,7 @@ impl GroupByVectorQuery {
     }
 
     pub fn set_query_vector_fp32(&mut self, vec: &[f32]) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                vec.as_ptr() as *const u8,
-                vec.len() * core::mem::size_of::<f32>(),
-            )
-        };
-        self.set_query_vector_raw(bytes)
+        self.set_query_vector_raw(slice_as_bytes(vec))
     }
 
     pub fn filter(&self) -> Option<String> {
@@ -248,18 +240,14 @@ impl GroupByVectorQuery {
     }
     pub fn set_filter(&mut self, filter: &str) -> Result<()> {
         let c = cstring(filter)?;
-        check(unsafe {
-            sys::zvec_group_by_vector_query_set_filter(self.ptr.as_ptr(), c.as_ptr())
-        })
+        check(unsafe { sys::zvec_group_by_vector_query_set_filter(self.ptr.as_ptr(), c.as_ptr()) })
     }
 
     pub fn include_vector(&self) -> bool {
         unsafe { sys::zvec_group_by_vector_query_get_include_vector(self.as_ptr()) }
     }
     pub fn set_include_vector(&mut self, b: bool) -> Result<()> {
-        check(unsafe {
-            sys::zvec_group_by_vector_query_set_include_vector(self.ptr.as_ptr(), b)
-        })
+        check(unsafe { sys::zvec_group_by_vector_query_set_include_vector(self.ptr.as_ptr(), b) })
     }
 
     pub fn set_output_fields(&mut self, fields: &[&str]) -> Result<()> {
@@ -319,3 +307,6 @@ impl Drop for GroupByVectorQuery {
         unsafe { sys::zvec_group_by_vector_query_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: see VectorQuery.
+unsafe impl Send for GroupByVectorQuery {}

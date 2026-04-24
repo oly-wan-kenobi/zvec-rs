@@ -13,7 +13,10 @@ use crate::sys;
 macro_rules! ensure_ptr {
     ($ptr:expr, $ctx:expr) => {
         NonNull::new($ptr).ok_or_else(|| {
-            ZvecError::with_message(ErrorCode::ResourceExhausted, concat!($ctx, " returned NULL"))
+            ZvecError::with_message(
+                ErrorCode::ResourceExhausted,
+                concat!($ctx, " returned NULL"),
+            )
         })
     };
 }
@@ -28,8 +31,11 @@ pub struct HnswQueryParams {
 
 impl HnswQueryParams {
     pub fn new(ef: i32, radius: f32, is_linear: bool, is_using_refiner: bool) -> Result<Self> {
-        let ptr = unsafe { sys::zvec_query_params_hnsw_create(ef, radius, is_linear, is_using_refiner) };
-        Ok(Self { ptr: ensure_ptr!(ptr, "zvec_query_params_hnsw_create")? })
+        let ptr =
+            unsafe { sys::zvec_query_params_hnsw_create(ef, radius, is_linear, is_using_refiner) };
+        Ok(Self {
+            ptr: ensure_ptr!(ptr, "zvec_query_params_hnsw_create")?,
+        })
     }
 
     pub fn set_ef(&mut self, ef: i32) -> Result<()> {
@@ -73,6 +79,10 @@ impl Drop for HnswQueryParams {
     }
 }
 
+// SAFETY: pure builder; see IndexParams.
+unsafe impl Send for HnswQueryParams {}
+unsafe impl Sync for HnswQueryParams {}
+
 // -----------------------------------------------------------------------------
 // IVF
 // -----------------------------------------------------------------------------
@@ -83,10 +93,11 @@ pub struct IvfQueryParams {
 
 impl IvfQueryParams {
     pub fn new(nprobe: i32, is_using_refiner: bool, scale_factor: f32) -> Result<Self> {
-        let ptr = unsafe {
-            sys::zvec_query_params_ivf_create(nprobe, is_using_refiner, scale_factor)
-        };
-        Ok(Self { ptr: ensure_ptr!(ptr, "zvec_query_params_ivf_create")? })
+        let ptr =
+            unsafe { sys::zvec_query_params_ivf_create(nprobe, is_using_refiner, scale_factor) };
+        Ok(Self {
+            ptr: ensure_ptr!(ptr, "zvec_query_params_ivf_create")?,
+        })
     }
 
     pub fn set_nprobe(&mut self, nprobe: i32) -> Result<()> {
@@ -137,6 +148,10 @@ impl Drop for IvfQueryParams {
     }
 }
 
+// SAFETY: pure builder; see IndexParams.
+unsafe impl Send for IvfQueryParams {}
+unsafe impl Sync for IvfQueryParams {}
+
 // -----------------------------------------------------------------------------
 // Flat
 // -----------------------------------------------------------------------------
@@ -148,7 +163,9 @@ pub struct FlatQueryParams {
 impl FlatQueryParams {
     pub fn new(is_using_refiner: bool, scale_factor: f32) -> Result<Self> {
         let ptr = unsafe { sys::zvec_query_params_flat_create(is_using_refiner, scale_factor) };
-        Ok(Self { ptr: ensure_ptr!(ptr, "zvec_query_params_flat_create")? })
+        Ok(Self {
+            ptr: ensure_ptr!(ptr, "zvec_query_params_flat_create")?,
+        })
     }
 
     pub fn set_scale_factor(&mut self, f: f32) -> Result<()> {
@@ -191,3 +208,7 @@ impl Drop for FlatQueryParams {
         unsafe { sys::zvec_query_params_flat_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: pure builder; see IndexParams.
+unsafe impl Send for FlatQueryParams {}
+unsafe impl Sync for FlatQueryParams {}

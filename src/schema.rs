@@ -143,6 +143,16 @@ impl Drop for FieldSchema {
     }
 }
 
+// SAFETY: FieldSchema is a builder/description object with no hidden shared
+// state; mutation requires `&mut self`.
+unsafe impl Send for FieldSchema {}
+unsafe impl Sync for FieldSchema {}
+
+// SAFETY: FieldSchemaRef is a borrowed pointer whose lifetime is tied to the
+// parent schema; all accessors are `&self` read-only queries.
+unsafe impl Send for FieldSchemaRef<'_> {}
+unsafe impl Sync for FieldSchemaRef<'_> {}
+
 // -----------------------------------------------------------------------------
 // FieldSchemaRef (non-owning)
 // -----------------------------------------------------------------------------
@@ -252,9 +262,7 @@ impl CollectionSchema {
     }
 
     pub fn add_field(&mut self, field: &FieldSchema) -> Result<()> {
-        check(unsafe {
-            sys::zvec_collection_schema_add_field(self.ptr.as_ptr(), field.as_ptr())
-        })
+        check(unsafe { sys::zvec_collection_schema_add_field(self.ptr.as_ptr(), field.as_ptr()) })
     }
 
     pub fn alter_field(&mut self, field_name: &str, new_field: &FieldSchema) -> Result<()> {
@@ -274,7 +282,9 @@ impl CollectionSchema {
     }
 
     pub fn has_field(&self, field_name: &str) -> bool {
-        let Ok(c) = cstring(field_name) else { return false };
+        let Ok(c) = cstring(field_name) else {
+            return false;
+        };
         unsafe { sys::zvec_collection_schema_has_field(self.as_ptr(), c.as_ptr()) }
     }
 
@@ -286,17 +296,13 @@ impl CollectionSchema {
 
     pub fn forward_field(&self, field_name: &str) -> Result<Option<FieldSchemaRef<'_>>> {
         let c = cstring(field_name)?;
-        let p = unsafe {
-            sys::zvec_collection_schema_get_forward_field(self.as_ptr(), c.as_ptr())
-        };
+        let p = unsafe { sys::zvec_collection_schema_get_forward_field(self.as_ptr(), c.as_ptr()) };
         Ok(FieldSchemaRef::from_ptr(p))
     }
 
     pub fn vector_field(&self, field_name: &str) -> Result<Option<FieldSchemaRef<'_>>> {
         let c = cstring(field_name)?;
-        let p = unsafe {
-            sys::zvec_collection_schema_get_vector_field(self.as_ptr(), c.as_ptr())
-        };
+        let p = unsafe { sys::zvec_collection_schema_get_vector_field(self.as_ptr(), c.as_ptr()) };
         Ok(FieldSchemaRef::from_ptr(p))
     }
 
@@ -412,7 +418,9 @@ impl CollectionSchema {
     }
 
     pub fn has_index(&self, field_name: &str) -> bool {
-        let Ok(c) = cstring(field_name) else { return false };
+        let Ok(c) = cstring(field_name) else {
+            return false;
+        };
         unsafe { sys::zvec_collection_schema_has_index(self.as_ptr(), c.as_ptr()) }
     }
 }
@@ -422,6 +430,10 @@ impl Drop for CollectionSchema {
         unsafe { sys::zvec_collection_schema_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: see FieldSchema.
+unsafe impl Send for CollectionSchema {}
+unsafe impl Sync for CollectionSchema {}
 
 unsafe fn take_zvec_string(ptr: *mut sys::zvec_string_t) -> Option<String> {
     if ptr.is_null() {

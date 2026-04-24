@@ -44,9 +44,7 @@ impl IndexParams {
     }
 
     pub fn quantize_type(&self) -> QuantizeType {
-        QuantizeType::from_raw(unsafe {
-            sys::zvec_index_params_get_quantize_type(self.as_ptr())
-        })
+        QuantizeType::from_raw(unsafe { sys::zvec_index_params_get_quantize_type(self.as_ptr()) })
     }
 
     pub fn set_quantize_type(&mut self, q: QuantizeType) -> Result<()> {
@@ -55,7 +53,9 @@ impl IndexParams {
 
     /// Set HNSW-specific parameters. Only valid when `index_type() == Hnsw`.
     pub fn set_hnsw_params(&mut self, m: i32, ef_construction: i32) -> Result<()> {
-        check(unsafe { sys::zvec_index_params_set_hnsw_params(self.ptr.as_ptr(), m, ef_construction) })
+        check(unsafe {
+            sys::zvec_index_params_set_hnsw_params(self.ptr.as_ptr(), m, ef_construction)
+        })
     }
 
     pub fn hnsw_m(&self) -> i32 {
@@ -89,7 +89,11 @@ impl IndexParams {
     }
 
     /// Set inverted-index-specific parameters.
-    pub fn set_invert_params(&mut self, enable_range_opt: bool, enable_wildcard: bool) -> Result<()> {
+    pub fn set_invert_params(
+        &mut self,
+        enable_range_opt: bool,
+        enable_wildcard: bool,
+    ) -> Result<()> {
         check(unsafe {
             sys::zvec_index_params_set_invert_params(
                 self.ptr.as_ptr(),
@@ -103,11 +107,7 @@ impl IndexParams {
         let mut range_opt = false;
         let mut wildcard = false;
         check(unsafe {
-            sys::zvec_index_params_get_invert_params(
-                self.as_ptr(),
-                &mut range_opt,
-                &mut wildcard,
-            )
+            sys::zvec_index_params_get_invert_params(self.as_ptr(), &mut range_opt, &mut wildcard)
         })?;
         Ok((range_opt, wildcard))
     }
@@ -118,3 +118,8 @@ impl Drop for IndexParams {
         unsafe { sys::zvec_index_params_destroy(self.ptr.as_ptr()) };
     }
 }
+
+// SAFETY: IndexParams is a pure configuration object with no internal
+// shared state; mutation is gated by `&mut self`.
+unsafe impl Send for IndexParams {}
+unsafe impl Sync for IndexParams {}
