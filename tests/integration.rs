@@ -373,6 +373,94 @@ fn derive_into_doc_roundtrip() -> zvec::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "derive")]
+#[test]
+fn derive_into_and_from_doc_roundtrip() -> zvec::Result<()> {
+    use zvec::{FromDoc, IntoDoc};
+
+    #[derive(IntoDoc, FromDoc, Debug, Default, PartialEq)]
+    #[allow(dead_code)]
+    struct Article {
+        #[zvec(pk)]
+        id: String,
+        title: String,
+        #[zvec(rename = "text")]
+        body: String,
+        #[zvec(vector_fp32)]
+        embedding: Vec<f32>,
+        views: i64,
+        summary: Option<String>,
+        #[zvec(skip)]
+        audit: u64,
+    }
+
+    let mut schema = CollectionSchema::new("articles")?;
+    let mut invert = IndexParams::new(IndexType::Invert)?;
+    invert.set_invert_params(true, false)?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::Cosine)?;
+    hnsw.set_hnsw_params(16, 200)?;
+
+    for name in ["id", "title", "text", "summary"] {
+        let mut f = FieldSchema::new(name, DataType::String, true, 0)?;
+        f.set_index_params(&invert)?;
+        schema.add_field(&f)?;
+    }
+    let mut views = FieldSchema::new("views", DataType::Int64, false, 0)?;
+    views.set_index_params(&invert)?;
+    schema.add_field(&views)?;
+    let mut emb = FieldSchema::new("embedding", DataType::VectorFp32, false, 3)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+
+    let path = tmp_path("derive_round");
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let article = Article {
+        id: "a".into(),
+        title: "Hello".into(),
+        body: "body text".into(),
+        embedding: vec![0.1, 0.2, 0.3],
+        views: 42,
+        summary: Some("short summary".into()),
+        audit: 9999, // skipped on insert; defaulted on read.
+    };
+
+    let doc = article.into_doc()?;
+    collection.insert(&[&doc])?;
+    collection.flush()?;
+
+    // Fetch back and decode.
+    let results = collection.fetch(&["a"])?;
+    assert_eq!(results.len(), 1);
+    let row = results.get(0).expect("row");
+    let got = Article::from_doc(row)?;
+
+    assert_eq!(got.id, "a");
+    assert_eq!(got.title, "Hello");
+    assert_eq!(got.body, "body text");
+    assert_eq!(got.embedding, vec![0.1, 0.2, 0.3]);
+    assert_eq!(got.views, 42);
+    assert_eq!(got.summary.as_deref(), Some("short summary"));
+    assert_eq!(got.audit, 0, "skipped field should default");
+
+    // A doc without the `summary` field should decode with `summary = None`.
+    let mut bare = Doc::new()?;
+    bare.set_pk("b")?;
+    bare.add_string("id", "b")?;
+    bare.add_string("title", "")?;
+    bare.add_string("text", "")?;
+    bare.add_vector_fp32("embedding", &[0.0, 0.0, 0.0])?;
+    bare.add_int64("views", 0)?;
+    collection.insert(&[&bare])?;
+    collection.flush()?;
+    let results = collection.fetch(&["b"])?;
+    let got = Article::from_doc(results.get(0).unwrap())?;
+    assert_eq!(got.summary, None);
+
+    Ok(())
+}
+
 #[test]
 fn schema_introspection() -> zvec::Result<()> {
     let schema = basic_schema()?;
