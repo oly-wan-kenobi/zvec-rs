@@ -843,3 +843,298 @@ fn fetch_missing_pk_returns_nothing() -> zvec::Result<()> {
     assert_eq!(got.len(), 0);
     Ok(())
 }
+
+// -----------------------------------------------------------------------------
+// More error paths + edge cases
+// -----------------------------------------------------------------------------
+
+#[test]
+fn invalid_filter_syntax_surfaces_as_invalid_argument() -> zvec::Result<()> {
+    let path = tmp_path("bad_filter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(1)?;
+    q.set_filter("this is not valid zvec filter syntax")?;
+
+    match collection.query(&q) {
+        Ok(_) => panic!("invalid filter should have errored"),
+        Err(err) => {
+            assert_eq!(err.code, zvec::ErrorCode::InvalidArgument);
+            assert!(
+                err.message
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains("filter"),
+                "error message should mention the filter; got {:?}",
+                err.message
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_insert_rejected_and_empty_fetch_is_ok() -> zvec::Result<()> {
+    // zvec refuses an insert batch of size 0 with InvalidArgument
+    // ("docs, doc_count, success_count and error_count cannot be
+    // null/zero"). Lock that behavior in so callers know to guard.
+    // Empty fetch, on the other hand, is a legal no-op.
+    let path = tmp_path("empty_io");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    match collection.insert(&[]) {
+        Ok(summary) => panic!("expected empty insert to error, got {summary:?}"),
+        Err(err) => assert_eq!(err.code, zvec::ErrorCode::InvalidArgument),
+    }
+
+    let fetched = collection.fetch(&[])?;
+    assert_eq!(fetched.len(), 0);
+    Ok(())
+}
+
+#[test]
+fn query_on_empty_collection_returns_zero_hits() -> zvec::Result<()> {
+    let path = tmp_path("empty_query");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(10)?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 0);
+    Ok(())
+}
+
+#[test]
+fn duplicate_insert_surfaces_per_doc_error() -> zvec::Result<()> {
+    // zvec treats a duplicate PK as a per-doc failure in the batch,
+    // not a whole-batch error. Verify our summary + results counters
+    // reflect that.
+    let path = tmp_path("dup_insert");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let first = mk_doc("same", [1.0, 0.0, 0.0])?;
+    collection.insert(&[&first])?;
+    collection.flush()?;
+
+    let second = mk_doc("same", [0.0, 1.0, 0.0])?;
+    let results = collection.insert_with_results(&[&second])?;
+    assert_eq!(results.len(), 1);
+    // Some versions of zvec may report `AlreadyExists`, some may
+    // fold duplicates under `InvalidArgument` or `FailedPrecondition`.
+    // We don't care which — just that the per-doc status is *not* OK.
+    assert_ne!(
+        results[0].code,
+        zvec::ErrorCode::Ok,
+        "duplicate insert should not be reported as OK"
+    );
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Query knobs: include_vector, output_fields, HNSW query params
+// -----------------------------------------------------------------------------
+
+#[test]
+fn include_vector_brings_vector_back() -> zvec::Result<()> {
+    let path = tmp_path("include_vec");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [0.1, 0.2, 0.3])?])?;
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[0.1, 0.2, 0.3])?;
+    q.set_topk(1)?;
+    q.set_include_vector(true)?;
+
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 1);
+    let got = results.get(0).unwrap().get_vector_fp32("embedding")?;
+    assert_eq!(got.len(), 3);
+    // Tolerate the sub-ULP drift discussed in PR #12.
+    for (actual, expected) in got.iter().zip([0.1_f32, 0.2, 0.3]) {
+        assert!(
+            (actual - expected).abs() < 1e-5,
+            "got {actual}, want {expected}",
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn output_fields_projection_is_configurable() -> zvec::Result<()> {
+    // We don't make a deep assertion about which fields arrive back
+    // (zvec's projection is an optimization hint, not a strict
+    // filter), but we do assert the call shape works end to end.
+    let path = tmp_path("projection");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(1)?;
+    q.set_output_fields(&["id"])?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(q.output_fields()?, vec!["id".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn hnsw_query_params_apply_cleanly() -> zvec::Result<()> {
+    use zvec::HnswQueryParams;
+
+    let path = tmp_path("hnsw_qparams");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    for i in 0..10 {
+        collection.insert(&[&mk_doc(&format!("d{i}"), [i as f32, 0.0, 0.0])?])?;
+    }
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[0.0, 0.0, 0.0])?;
+    q.set_topk(5)?;
+    // `ef=64` is well above the default; this should not panic and
+    // must still return up-to-5 results.
+    q.set_hnsw_params(HnswQueryParams::new(64, 0.0, false, false)?)?;
+
+    let results = collection.query(&q)?;
+    assert!(results.len() <= 5);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Doc introspection — the read side of the Doc API
+// -----------------------------------------------------------------------------
+
+#[test]
+fn doc_field_predicates() -> zvec::Result<()> {
+    let mut d = Doc::new()?;
+    assert!(d.is_empty());
+    assert_eq!(d.field_count(), 0);
+
+    d.add_string("a", "hello")?;
+    d.add_int64("n", 42)?;
+    assert!(!d.is_empty());
+    assert_eq!(d.field_count(), 2);
+
+    let borrow = d.borrow();
+    assert!(borrow.has_field("a"));
+    assert!(borrow.has_field("n"));
+    assert!(!borrow.has_field("missing"));
+    assert!(!borrow.is_field_null("a"));
+
+    let mut names = borrow.field_names()?;
+    names.sort();
+    assert_eq!(names, vec!["a".to_string(), "n".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn doc_serialize_roundtrip() -> zvec::Result<()> {
+    let mut d = Doc::new()?;
+    d.set_pk("serialised")?;
+    d.add_string("title", "Hello")?;
+    d.add_int64("views", 7)?;
+    d.add_vector_fp32("embedding", &[0.1, 0.2, 0.3])?;
+
+    let bytes = d.serialize()?;
+    assert!(
+        !bytes.is_empty(),
+        "serialize should produce non-empty bytes"
+    );
+
+    let restored = Doc::deserialize(&bytes)?;
+    let borrow = restored.borrow();
+    assert_eq!(borrow.pk_copy().as_deref(), Some("serialised"));
+    assert_eq!(borrow.field_count(), 3);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// CollectionStats: verify more than doc_count
+// -----------------------------------------------------------------------------
+
+#[test]
+fn collection_stats_reports_indexes() -> zvec::Result<()> {
+    let path = tmp_path("stats_indexes");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    for i in 0..3 {
+        collection.insert(&[&mk_doc(&format!("d{i}"), [i as f32, 0.0, 0.0])?])?;
+    }
+    collection.flush()?;
+
+    let stats = collection.stats()?;
+    assert_eq!(stats.doc_count(), 3);
+    // basic_schema() declares two indexes (invert on `id`, HNSW on
+    // `embedding`) but zvec 0.3.1 reports a single rolled-up "index"
+    // entry in stats. Just assert stats exposes at least one index
+    // and that every reported entry has a plausible name/completeness.
+    assert!(
+        stats.index_count() >= 1,
+        "expected at least 1 index, got {}",
+        stats.index_count()
+    );
+    let indexes = stats.indexes();
+    assert_eq!(indexes.len(), stats.index_count());
+    for (name, completeness) in &indexes {
+        assert!(!name.is_empty(), "index name should be non-empty");
+        assert!(
+            (0.0..=1.0).contains(completeness),
+            "completeness should be in [0, 1]; got {completeness}",
+        );
+    }
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Larger-scale: exercise batching at a realistic size
+// -----------------------------------------------------------------------------
+
+#[test]
+fn bulk_insert_200_docs_scales() -> zvec::Result<()> {
+    let path = tmp_path("bulk_200");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let docs: Vec<Doc> = (0..200)
+        .map(|i| {
+            let pk = format!("d{i:04}");
+            let x = (i as f32) * 0.01;
+            mk_doc(&pk, [x, 1.0 - x, x * 0.5]).unwrap()
+        })
+        .collect();
+    let refs: Vec<&Doc> = docs.iter().collect();
+    let summary = collection.insert(&refs)?;
+    assert_eq!(summary.success, 200);
+    assert_eq!(summary.error, 0);
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 200);
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(10)?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 10);
+    Ok(())
+}

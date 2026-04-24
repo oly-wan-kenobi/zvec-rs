@@ -171,3 +171,46 @@ unsafe fn take_last_error_message() -> Option<String> {
     sys::zvec_free(buf as *mut _);
     Some(msg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_codes_roundtrip_through_raw() {
+        for code in [
+            ErrorCode::Ok,
+            ErrorCode::NotFound,
+            ErrorCode::AlreadyExists,
+            ErrorCode::InvalidArgument,
+            ErrorCode::PermissionDenied,
+            ErrorCode::FailedPrecondition,
+            ErrorCode::ResourceExhausted,
+            ErrorCode::Unavailable,
+            ErrorCode::Internal,
+            ErrorCode::NotSupported,
+            ErrorCode::Unknown,
+        ] {
+            assert_eq!(ErrorCode::from_raw(code.to_raw()), code);
+        }
+    }
+
+    #[test]
+    fn unknown_code_falls_through_to_other() {
+        // Pick a value outside the known ZVEC_ERROR_* range.
+        let raw_unknown: sys::zvec_error_code_t::Type = 9_999;
+        assert_eq!(
+            ErrorCode::from_raw(raw_unknown),
+            ErrorCode::Other(raw_unknown as i32),
+        );
+        // Round-trips back out to the same raw value.
+        assert_eq!(ErrorCode::Other(raw_unknown as i32).to_raw(), raw_unknown,);
+    }
+
+    #[test]
+    fn is_ok_matches_variant() {
+        assert!(ErrorCode::Ok.is_ok());
+        assert!(!ErrorCode::NotFound.is_ok());
+        assert!(!ErrorCode::Other(42).is_ok());
+    }
+}
