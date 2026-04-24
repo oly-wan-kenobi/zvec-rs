@@ -8,17 +8,22 @@ matching `CHANGELOG.md` section.
 
 ## One-time setup
 
-1. Generate a crates.io API token at <https://crates.io/me>.
-   Recommended scope: `publish-update`, restricted to `zvec` and
-   `zvec-derive`.
+1. Generate a crates.io API token at <https://crates.io/settings/tokens>.
+   Recommended scopes:
+   - **First release** (when the crate names aren't on crates.io yet):
+     `publish-new` **and** `publish-update`. `publish-update` alone
+     fails the first publish with
+     `403 Forbidden: this token does not have the required permissions
+     to perform this action`, because the crates don't exist yet.
+   - **Subsequent releases** (both crates are already on crates.io):
+     `publish-update`, optionally restricted to `zvec` and
+     `zvec-derive`.
 2. Add it to the repo at *Settings → Secrets and variables → Actions
    → New repository secret*:
    - **Name:** `CARGO_REGISTRY_TOKEN`
    - **Value:** the token from step 1.
-3. Make sure both crates already exist on crates.io under your
-   account, or that the token's account has the *Owners* role.
-   First publish of a brand-new crate name only requires that the
-   name is available.
+3. If you used an init-only token for step 1, rotate to a
+   `publish-update`-only token once both crates are live.
 
 ## Cutting a release
 
