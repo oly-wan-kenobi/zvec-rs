@@ -122,21 +122,34 @@ jobs:
         run: cargo run --example basic
 
   bundled-feature:
-    name: bundled feature (wheel-based)
-    runs-on: ubuntu-22.04
+    name: bundled feature (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.os }}
     # Independent of build-zvec — this path downloads upstream's PyPI wheel
     # at build time instead of compiling from source.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install libclang (for bindgen)
+      - name: Install libclang (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
+      # macOS runners ship a working clang / libclang out of the box.
       - uses: Swatinem/rust-cache@v2
       - name: Build with --features bundled
         run: cargo build --no-default-features --features bundled --verbose
       - name: Test with --features bundled
+        shell: bash
         run: |
-          # Point LD_LIBRARY_PATH at the wheel extraction dir that build.rs
-          # populated under OUT_DIR.
+          # Point the dynamic-library search path at the wheel extraction dir
+          # that build.rs populated under OUT_DIR. On macOS that variable is
+          # DYLD_FALLBACK_LIBRARY_PATH; on Linux it's LD_LIBRARY_PATH.
           LIB_DIR=$(ls -d target/debug/build/zvec-*/out/zvec-bundled/lib | head -1)
-          LD_LIBRARY_PATH="$LIB_DIR" cargo test --no-default-features --features bundled --verbose
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            export DYLD_FALLBACK_LIBRARY_PATH="$LIB_DIR"
+          else
+            export LD_LIBRARY_PATH="$LIB_DIR"
+          fi
+          cargo test --no-default-features --features bundled --verbose
