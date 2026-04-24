@@ -371,9 +371,15 @@ overhead. If you want re-rankers or you're stuck on zvec 0.2.x,
 │   ├── version.rs              # Prints the runtime zvec version.
 │   └── basic.rs                # Rust port of basic_example.c.
 ├── tests/integration.rs        # 5 end-to-end roundtrip tests.
-└── .github/workflows/ci.yml    # rustfmt + clippy + tests, twice —
-                                # once against a source build, once against
-                                # `--features bundled`.
+└── .github/workflows/
+    ├── ci.yml                  # Per-PR: bundled-feature matrix
+    │                           # (Linux + macOS) running rustfmt,
+    │                           # clippy, and tests against an
+    │                           # upstream-shipped libzvec_c_api.
+    └── source-build.yml        # Weekly cron + manual dispatch:
+                                # validates `scripts/build-zvec.sh`
+                                # by compiling zvec from source and
+                                # re-running the test suite.
 ```
 
 ## Contributing
@@ -384,8 +390,8 @@ overhead. If you want re-rankers or you're stuck on zvec 0.2.x,
   end-to-end — they need a working `libzvec_c_api`. The `bundled` feature is
   the lowest-friction way to get one: `cargo test --features bundled`.
 - When bumping the vendored zvec version, update `vendor/c_api.h`,
-  `ZVEC_REF` in `scripts/build-zvec.sh` and `.github/workflows/ci.yml`, and
-  the pinned wheels in `build.rs`.
+  `ZVEC_REF` in `scripts/build-zvec.sh`, both workflow files in
+  `.github/workflows/`, and the pinned wheels in `build.rs`.
 
 ## License
 

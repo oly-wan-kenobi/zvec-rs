@@ -12,115 +12,11 @@ env:
   # zvec ref whose c_api.h is vendored in this repo. When bumping
   # `vendor/c_api.h`, bump this too.
   ZVEC_REF: v0.3.1
+  # Feature combination CI exercises. Bump as new optional features
+  # land so they get built + tested on every PR.
+  FEATURES: "bundled serde-json"
 
 jobs:
-  build-zvec:
-    name: Build libzvec_c_api (from source)
-    runs-on: ubuntu-22.04
-    # A clean zvec build (RocksDB + Arrow + Protobuf + glog + gflags + …)
-    # easily overruns the default GH Actions timeout; keep a big budget.
-    timeout-minutes: 120
-    outputs:
-      cache-key: ${{ steps.meta.outputs.cache-key }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute cache key
-        id: meta
-        run: |
-          echo "cache-key=zvec-${ZVEC_REF}-$(uname -s)-$(uname -m)-$(sha256sum scripts/build-zvec.sh | cut -c1-12)" \
-            >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached zvec install
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: zvec-install
-          key: ${{ steps.meta.outputs.cache-key }}
-
-      - name: Free up runner disk
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: true
-          swap-storage: false
-
-      - name: Install build dependencies
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build build-essential git patch ca-certificates \
-            pkg-config python3
-
-      - name: Build libzvec_c_api via scripts/build-zvec.sh
-        if: steps.cache.outputs.cache-hit != 'true'
-        env:
-          CMAKE_GENERATOR: Ninja
-          # Cap parallel compile to keep peak RSS under the 16 GB runner.
-          # Arrow + RocksDB C++ templates are the most memory-hungry bits.
-          JOBS: "2"
-        run: |
-          scripts/build-zvec.sh "$PWD/zvec-install"
-
-      - name: Upload install prefix as an artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libzvec_c_api
-          path: zvec-install
-          retention-days: 3
-
-  lint-and-test:
-    name: rustfmt + clippy + tests
-    needs: build-zvec
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: libzvec_c_api
-          path: zvec-install
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Install libclang (for bindgen)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
-
-      - name: Wire zvec install into the environment
-        run: |
-          ABS="$PWD/zvec-install"
-          echo "ZVEC_ROOT=$ABS"             >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$ABS/lib"   >> "$GITHUB_ENV"
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: rustfmt
-        run: cargo fmt --all -- --check
-
-      - name: Build (lib)
-        run: cargo build --verbose
-
-      - name: Clippy
-        run: cargo clippy --all-targets --no-deps -- -D warnings
-
-      - name: Build examples + tests
-        run: cargo build --all-targets --verbose
-
-      - name: Test
-        run: cargo test --verbose
-
-      - name: Run basic example
-        run: cargo run --example basic
-
   bundled-feature:
     name: bundled feature (${{ matrix.os }})
     strategy:
@@ -128,19 +24,33 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macos-14]
     runs-on: ${{ matrix.os }}
-    # Independent of build-zvec — this path downloads upstream's PyPI wheel
-    # at build time instead of compiling from source.
+    # Downloads upstream's prebuilt libzvec_c_api from the PyPI wheel,
+    # then exercises the full Rust surface (rustfmt, clippy, tests) end
+    # to end. This is the gate every PR must pass.
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
       - name: Install libclang (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
       # macOS runners ship a working clang / libclang out of the box.
+
       - uses: Swatinem/rust-cache@v2
-      - name: Build with --features bundled,serde-json
-        run: cargo build --no-default-features --features "bundled serde-json" --verbose
-      - name: Test with --features bundled,serde-json
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (--features "${{ env.FEATURES }}")
+        run: cargo clippy --no-default-features --features "${{ env.FEATURES }}" --all-targets --no-deps -- -D warnings
+
+      - name: Build (--features "${{ env.FEATURES }}")
+        run: cargo build --no-default-features --features "${{ env.FEATURES }}" --verbose
+
+      - name: Test (--features "${{ env.FEATURES }}")
         shell: bash
         run: |
           # Point the dynamic-library search path at the wheel extraction dir
@@ -152,4 +62,4 @@ jobs:
           else
             export LD_LIBRARY_PATH="$LIB_DIR"
           fi
-          cargo test --no-default-features --features "bundled serde-json" --verbose
+          cargo test --no-default-features --features "${{ env.FEATURES }}" --verbose
