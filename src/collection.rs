@@ -1,4 +1,36 @@
-//! [`Collection`] — a zvec collection.
+//! [`Collection`] — create, open, and operate on a zvec collection.
+//!
+//! This module also defines [`DocSet`] (the RAII result-set returned by
+//! [`Collection::query`] and [`Collection::fetch`]), [`WriteSummary`]
+//! (per-batch `success`/`error` tallies), and [`WriteResult`] (per-doc
+//! status returned by the `*_with_results` variants).
+//!
+//! # Lifecycle
+//!
+//! - [`Collection::create_and_open`] — create a new collection at `path`
+//!   from a [`CollectionSchema`].
+//! - [`Collection::open`] — open an existing one (errors if `path` is
+//!   empty / not a zvec collection).
+//! - [`Collection::flush`] — persist pending writes.
+//! - [`Collection::close`] — close + destroy the handle. The normal
+//!   `Drop` impl already destroys on scope exit; use `close` only when
+//!   you need to observe the close error code.
+//!
+//! See also [`Collection::create_index`] / [`add_column`] /
+//! [`alter_column`] for live DDL, and [`Collection::insert`] /
+//! [`update`] / [`upsert`] / [`delete`] / [`delete_by_filter`] plus the
+//! streaming [`insert_iter`] / [`upsert_iter`] / [`update_iter`]
+//! variants for DML.
+//!
+//! [`add_column`]: Collection::add_column
+//! [`alter_column`]: Collection::alter_column
+//! [`update`]: Collection::update
+//! [`upsert`]: Collection::upsert
+//! [`delete`]: Collection::delete
+//! [`delete_by_filter`]: Collection::delete_by_filter
+//! [`insert_iter`]: Collection::insert_iter
+//! [`upsert_iter`]: Collection::upsert_iter
+//! [`update_iter`]: Collection::update_iter
 
 use std::ffi::CString;
 use std::ptr::NonNull;

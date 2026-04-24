@@ -1,4 +1,11 @@
 //! [`CollectionOptions`] — per-collection runtime settings.
+//!
+//! Pass a [`CollectionOptions`] to
+//! [`Collection::create_and_open`](crate::Collection::create_and_open) or
+//! [`Collection::open`](crate::Collection::open) to override defaults
+//! like mmap usage, per-segment buffer size, or whether the handle is
+//! read-only. Passing `None` uses zvec's built-in defaults, which is what
+//! you want most of the time.
 
 use std::ptr::NonNull;
 

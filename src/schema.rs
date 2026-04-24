@@ -1,4 +1,32 @@
 //! Field and collection schema types.
+//!
+//! - [`FieldSchema`] (+ non-owning [`FieldSchemaRef`]) describes one
+//!   column: name, [`DataType`](crate::DataType), nullability, dimension
+//!   (for vector fields), and optional [`IndexParams`].
+//! - [`CollectionSchema`] is the ordered set of fields handed to
+//!   [`Collection::create_and_open`](crate::Collection::create_and_open).
+//!
+//! Most callers compose schemas through the
+//! [`CollectionSchema::builder`] + [`FieldSchema::string`] /
+//! [`FieldSchema::vector_fp32`] / etc. API. The lower-level `new` +
+//! `set_*` surface remains available when the builder doesn't fit.
+//!
+//! ```no_run
+//! # fn main() -> zvec::Result<()> {
+//! use zvec::{CollectionSchema, FieldSchema, MetricType};
+//!
+//! let schema = CollectionSchema::builder("docs")
+//!     .field(FieldSchema::string("id").invert_index(true, false))
+//!     .field(
+//!         FieldSchema::vector_fp32("embedding", 3)
+//!             .hnsw(16, 200)
+//!             .metric(MetricType::Cosine),
+//!     )
+//!     .build()?;
+//! # let _ = schema;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;

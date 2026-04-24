@@ -13,12 +13,22 @@ use crate::schema::CollectionSchema;
 use crate::sys;
 use crate::types::{DataType, DocOperator};
 
-/// Owning document.
+/// Owning document — a row to insert or an in-memory staging buffer.
+///
+/// Construct with [`Doc::new`], attach a primary key via
+/// [`Doc::set_pk`], then populate fields with the typed helpers
+/// ([`Doc::add_string`], [`Doc::add_vector_fp32`], [`Doc::add_int64`],
+/// …) or the lower-level [`Doc::add_field_raw`]. For JSON inputs, see
+/// [`Doc::from_json`] behind the `serde-json` cargo feature. For
+/// struct-driven builds, enable the `derive` feature and use
+/// `#[derive(IntoDoc)]`.
 pub struct Doc {
     ptr: NonNull<sys::zvec_doc_t>,
 }
 
 impl Doc {
+    /// Allocate a new, empty doc. Call [`Doc::set_pk`] and the `add_*`
+    /// methods to populate it.
     pub fn new() -> Result<Self> {
         let ptr = unsafe { sys::zvec_doc_create() };
         NonNull::new(ptr).map(|ptr| Self { ptr }).ok_or_else(|| {

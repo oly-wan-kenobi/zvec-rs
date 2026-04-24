@@ -22,11 +22,24 @@ fn field_name_vec_to_c(fields: &[&str]) -> Result<(Vec<CString>, Vec<*const core
 // VectorQuery
 // -----------------------------------------------------------------------------
 
+/// Single-field similarity search configuration.
+///
+/// Set the target field with [`VectorQuery::set_field_name`], the query
+/// vector via one of the `set_query_vector_*` methods, and topk via
+/// [`VectorQuery::set_topk`]. Optional knobs include
+/// [`set_filter`](VectorQuery::set_filter),
+/// [`set_output_fields`](VectorQuery::set_output_fields),
+/// [`set_include_vector`](VectorQuery::set_include_vector), and the
+/// algorithm-specific `set_{hnsw,ivf,flat}_params` variants.
+///
+/// See [`crate::VectorQueryBuilder`] for a more ergonomic builder API.
 pub struct VectorQuery {
     ptr: NonNull<sys::zvec_vector_query_t>,
 }
 
 impl VectorQuery {
+    /// Allocate a new, empty query. Call the `set_*` methods to
+    /// configure it.
     pub fn new() -> Result<Self> {
         let ptr = unsafe { sys::zvec_vector_query_create() };
         NonNull::new(ptr).map(|ptr| Self { ptr }).ok_or_else(|| {
