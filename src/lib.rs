@@ -23,6 +23,35 @@
 //! `ZVEC_ROOT` to generate bindings against an installed header rather than
 //! the one vendored here.
 //!
+//! # Sharing a `Collection` across threads
+//!
+//! [`Collection`] is `Send + Sync`, so sharing one across threads is just
+//! `Arc<Collection>` — no dedicated `SharedCollection` type is needed.
+//! All mutating APIs take `&self` and delegate synchronisation to zvec's
+//! own C++ implementation (which uses a shared `std::shared_ptr<Collection>`
+//! internally).
+//!
+//! ```no_run
+//! # fn main() -> zvec::Result<()> {
+//! use std::sync::Arc;
+//! use std::thread;
+//! # use zvec::{Collection, CollectionSchema};
+//! # let schema: CollectionSchema = unreachable!();
+//! let collection = Arc::new(Collection::create_and_open("./coll", &schema, None)?);
+//! let handles: Vec<_> = (0..4)
+//!     .map(|_| {
+//!         let c = Arc::clone(&collection);
+//!         thread::spawn(move || c.flush())
+//!     })
+//!     .collect();
+//! for h in handles { let _ = h.join(); }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! `Doc`, `VectorQuery`, and `GroupByVectorQuery` are `Send` only — their
+//! setters mutate C-side state that isn't documented as concurrency-safe.
+//!
 //! # Quickstart
 //!
 //! ```no_run
@@ -85,6 +114,7 @@ mod index_params;
 mod options;
 mod query;
 mod query_params;
+pub mod rerank;
 mod schema;
 mod stats;
 mod types;

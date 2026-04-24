@@ -68,6 +68,21 @@ impl DocSet {
     pub fn iter(&self) -> impl Iterator<Item = DocRef<'_>> {
         (0..self.len).filter_map(move |i| self.get(i))
     }
+
+    /// Convert this result set into a flat `Vec<Hit>` suitable for
+    /// feeding into [`crate::rerank::RrfReRanker`] or
+    /// [`crate::rerank::WeightedReRanker`]. Rows whose primary key
+    /// cannot be read are skipped.
+    pub fn to_hits(&self) -> Vec<crate::rerank::Hit> {
+        self.iter()
+            .filter_map(|r| {
+                r.pk_copy().map(|pk| crate::rerank::Hit {
+                    pk,
+                    score: r.score(),
+                })
+            })
+            .collect()
+    }
 }
 
 impl Drop for DocSet {
