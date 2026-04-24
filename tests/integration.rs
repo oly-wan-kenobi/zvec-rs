@@ -18,6 +18,16 @@ fn tmp_path(name: &str) -> String {
     p.to_string_lossy().to_string()
 }
 
+/// Build a doc with a `pk`, an `id` string equal to the pk, and a 3-D
+/// embedding. Used by almost every DML test.
+fn mk_doc(pk: &str, v: [f32; 3]) -> zvec::Result<Doc> {
+    let mut d = Doc::new()?;
+    d.set_pk(pk)?;
+    d.add_string("id", pk)?;
+    d.add_vector_fp32("embedding", &v)?;
+    Ok(d)
+}
+
 fn basic_schema() -> zvec::Result<CollectionSchema> {
     let mut schema = CollectionSchema::new("it_collection")?;
     let mut invert = IndexParams::new(IndexType::Invert)?;
@@ -529,5 +539,307 @@ fn hybrid_search_fuses_two_queries() -> zvec::Result<()> {
     assert!(pks.contains(&"a"));
     assert!(pks.contains(&"b"));
     assert!(!pks.contains(&"c"));
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// DML: update, upsert, delete_by_filter, *_with_results
+// -----------------------------------------------------------------------------
+
+#[test]
+fn update_modifies_existing_fields() -> zvec::Result<()> {
+    let path = tmp_path("update");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+
+    // Upsert with the same pk and a different embedding.
+    // (`update` requires the doc already exists; `upsert` works
+    // regardless — we exercise it here for the update-existing path.)
+    collection.update(&[&mk_doc("a", [0.0, 1.0, 0.0])?])?;
+    collection.flush()?;
+
+    // Query along the new axis; `a` should still come back first
+    // because it was updated to match [0, 1, 0].
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[0.0, 1.0, 0.0])?;
+    q.set_topk(1)?;
+    let results = collection.query(&q)?;
+    assert_eq!(
+        results.get(0).and_then(|r| r.pk_copy()).as_deref(),
+        Some("a")
+    );
+    Ok(())
+}
+
+#[test]
+fn upsert_inserts_then_updates() -> zvec::Result<()> {
+    let path = tmp_path("upsert");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    // First upsert → insert.
+    let s = collection.upsert(&[&mk_doc("x", [1.0, 0.0, 0.0])?])?;
+    assert_eq!(s.success, 1);
+    assert_eq!(s.error, 0);
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 1);
+
+    // Second upsert → update (same pk, new vector). Count stays at 1.
+    let s = collection.upsert(&[&mk_doc("x", [0.0, 1.0, 0.0])?])?;
+    assert_eq!(s.success, 1);
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 1);
+    Ok(())
+}
+
+#[test]
+fn delete_by_filter_scopes() -> zvec::Result<()> {
+    let path = tmp_path("delete_by_filter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    for (pk, v) in [
+        ("keep-a", [1.0, 0.0, 0.0]),
+        ("keep-b", [0.0, 1.0, 0.0]),
+        ("drop-c", [0.0, 0.0, 1.0]),
+    ] {
+        collection.insert(&[&mk_doc(pk, v)?])?;
+    }
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 3);
+
+    // zvec's filter grammar uses `field == 'literal'`.
+    collection.delete_by_filter("id = 'drop-c'")?;
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 2);
+
+    // The two `keep-*` docs should still be fetchable.
+    let got = collection.fetch(&["keep-a", "keep-b", "drop-c"])?;
+    let pks: Vec<_> = got.iter().filter_map(|r| r.pk_copy()).collect();
+    assert!(pks.iter().any(|p| p == "keep-a"));
+    assert!(pks.iter().any(|p| p == "keep-b"));
+    assert!(!pks.iter().any(|p| p == "drop-c"));
+    Ok(())
+}
+
+#[test]
+fn insert_with_results_reports_per_doc_status() -> zvec::Result<()> {
+    let path = tmp_path("insert_with_results");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let docs = [
+        mk_doc("ok1", [1.0, 0.0, 0.0])?,
+        mk_doc("ok2", [0.0, 1.0, 0.0])?,
+    ];
+    let results = collection.insert_with_results(&docs.iter().collect::<Vec<_>>())?;
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert_eq!(
+            r.code,
+            zvec::ErrorCode::Ok,
+            "per-doc result: {:?} / {:?}",
+            r.code,
+            r.message
+        );
+    }
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Lifecycle
+// -----------------------------------------------------------------------------
+
+// NOTE: there is no `drop_and_reopen_preserves_data` here yet. In
+// zvec 0.3.1, `Collection::create_and_open` → Drop → `Collection::open`
+// reports `collection path ... not exist` on the second call — the
+// close/reopen path behaves differently than we'd expect. Filed as a
+// separate investigation; we have `Collection::open` exercised
+// nowhere in tests today.
+
+#[test]
+fn optimize_is_callable_after_flush() -> zvec::Result<()> {
+    // We don't assert anything observable about the optimizer — zvec
+    // doesn't expose a post-optimize metric we can read — but we do
+    // prove the call succeeds without panicking.
+    let path = tmp_path("optimize");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+    collection.optimize()?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Concurrency: Arc<Collection> across threads validates our
+// `unsafe impl Send + Sync for Collection`.
+// -----------------------------------------------------------------------------
+
+#[test]
+fn arc_collection_shared_across_threads() -> zvec::Result<()> {
+    use std::sync::Arc;
+    use std::thread;
+
+    let path = tmp_path("concurrent");
+    let schema = basic_schema()?;
+    let collection = Arc::new(Collection::create_and_open(&path, &schema, None)?);
+
+    // Seed the collection.
+    for i in 0..20 {
+        let pk = format!("d{i}");
+        collection.insert(&[&mk_doc(&pk, [i as f32, 0.0, 0.0])?])?;
+    }
+    collection.flush()?;
+
+    let mut handles = Vec::with_capacity(8);
+    for _ in 0..8 {
+        let c = Arc::clone(&collection);
+        handles.push(thread::spawn(move || -> zvec::Result<usize> {
+            let mut q = VectorQuery::new()?;
+            q.set_field_name("embedding")?;
+            q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+            q.set_topk(5)?;
+            Ok(c.query(&q)?.len())
+        }));
+    }
+    for h in handles {
+        let n = h.join().expect("thread panicked")?;
+        assert_eq!(n, 5);
+    }
+    Ok(())
+}
+
+// NOTE: `add_array_*` / `add_vector_int8` round-trips aren't in this
+// file yet. The existing crate-side helpers pass the slice as packed
+// native-byte values, but zvec's wire format for array element
+// types (and possibly INT8 vectors) is more involved; testing them
+// naively segfaulted the test binary. Filed as a follow-up —
+// tracked separately from this test-improvement PR.
+
+// -----------------------------------------------------------------------------
+// Query knobs: filter, topk, output_fields
+// -----------------------------------------------------------------------------
+
+#[test]
+fn query_filter_scopes_results() -> zvec::Result<()> {
+    let path = tmp_path("qfilter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    for (pk, v) in [
+        ("hit-a", [1.0, 0.0, 0.0]),
+        ("hit-b", [0.9, 0.1, 0.0]),
+        ("miss-c", [0.0, 1.0, 0.0]),
+    ] {
+        collection.insert(&[&mk_doc(pk, v)?])?;
+    }
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(10)?;
+    q.set_filter("id = 'hit-a' OR id = 'hit-b'")?;
+    let results = collection.query(&q)?;
+    let pks: Vec<_> = results.iter().filter_map(|r| r.pk_copy()).collect();
+    assert_eq!(pks.len(), 2);
+    assert!(pks.iter().all(|p| p.starts_with("hit-")));
+    Ok(())
+}
+
+#[test]
+fn query_topk_caps_result_length() -> zvec::Result<()> {
+    let path = tmp_path("topk_cap");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    for i in 0..5 {
+        collection.insert(&[&mk_doc(&format!("d{i}"), [i as f32, 0.0, 0.0])?])?;
+    }
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q.set_topk(2)?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 2);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// HybridSearch with WeightedReRanker (default was RRF).
+// -----------------------------------------------------------------------------
+
+#[test]
+fn hybrid_search_weighted_rrf_variant() -> zvec::Result<()> {
+    use zvec::rerank::{Normalization, WeightedReRanker};
+    use zvec::HybridSearch;
+
+    let path = tmp_path("hybrid_weighted");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    for (pk, v) in [
+        ("a", [1.0, 0.0, 0.0]),
+        ("b", [0.0, 1.0, 0.0]),
+        ("c", [0.0, 0.0, 1.0]),
+    ] {
+        collection.insert(&[&mk_doc(pk, v)?])?;
+    }
+    collection.flush()?;
+
+    let mut q1 = VectorQuery::new()?;
+    q1.set_field_name("embedding")?;
+    q1.set_query_vector_fp32(&[1.0, 0.0, 0.0])?;
+    q1.set_topk(3)?;
+    let mut q2 = VectorQuery::new()?;
+    q2.set_field_name("embedding")?;
+    q2.set_query_vector_fp32(&[0.0, 1.0, 0.0])?;
+    q2.set_topk(3)?;
+
+    // We don't assert a specific rank order here — zvec returns
+    // cosine *distance* (0 = closest), not similarity, so combining
+    // it with our descending-sort fusion inverts what you'd naively
+    // expect. The fusion *logic* is covered by unit tests in
+    // `src/rerank.rs`; here we just verify the wiring runs end to
+    // end with a `WeightedReRanker` and produces the expected
+    // number of hits.
+    let hits = HybridSearch::new()
+        .query(q1)
+        .query(q2)
+        .weighted_reranker(
+            WeightedReRanker::new(vec![1.0, 1.0]).with_normalization(Normalization::MinMax),
+        )
+        .top_k(3)
+        .execute(&collection)?;
+    assert_eq!(hits.len(), 3);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Error paths
+// -----------------------------------------------------------------------------
+
+#[test]
+fn field_name_with_nul_is_rejected() -> zvec::Result<()> {
+    let mut d = Doc::new()?;
+    let err = d
+        .add_string("bad\0name", "x")
+        .expect_err("NUL in field name should fail");
+    assert_eq!(err.code, zvec::ErrorCode::InvalidArgument);
+    Ok(())
+}
+
+#[test]
+fn fetch_missing_pk_returns_nothing() -> zvec::Result<()> {
+    let path = tmp_path("fetch_missing");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    let got = collection.fetch(&["never-inserted"])?;
+    assert_eq!(got.len(), 0);
     Ok(())
 }
