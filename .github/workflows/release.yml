@@ -24,6 +24,15 @@ on:
         description: "Tag to release (e.g. v0.1.0). Required for manual runs."
         required: true
         type: string
+  # Callable from upstream-track.yml after it bumps pins + verifies the
+  # bundled-feature matrix is green. Secrets are inherited with
+  # `secrets: inherit` in the caller.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)."
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always

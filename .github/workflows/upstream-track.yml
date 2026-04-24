@@ -1,0 +1,286 @@
+name: Track upstream zvec
+
+# End-to-end automation that mirrors new upstream zvec releases into
+# this repo:
+#   1. detect         — poll PyPI for the current zvec release.
+#   2. bump           — if there's a newer one than what's pinned,
+#                       run scripts/bump-zvec-pin.sh, commit on
+#                       auto-bump/zvec-v<X.Y.Z>, and push.
+#   3. test           — run the same bundled-feature matrix ci.yml
+#                       runs, against the bump branch.
+#   4. merge-and-tag  — fast-forward main to the bump commit and tag
+#                       v<crate-version>.
+#   5. publish        — hand off to the release workflow
+#                       (workflow_call) to push both crates to
+#                       crates.io + cut the GitHub release.
+#
+# Failure modes:
+#   • Test fails → the branch stays on origin; job opens a PR so
+#     someone can investigate the upstream change.
+#   • Merge/tag fails (main moved ahead, conflict) → same deal.
+#
+# Manual runs (workflow_dispatch) accept an override `version` input
+# so you can force-track an older or candidate release.
+
+on:
+  schedule:
+    # Daily at 06:00 UTC — inexpensive, plenty fast to mirror a zvec
+    # release within a day of it being announced.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Override: zvec PyPI version to track (e.g. 0.3.2). Leave empty to use the latest."
+        required: false
+        type: string
+
+# Only one track-attempt at a time. cancel-in-progress=false so an
+# in-flight publish finishes before the next daily run kicks off.
+concurrency:
+  group: upstream-track
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  FEATURES: "bundled serde-json half tokio derive"
+
+permissions:
+  contents: write      # push commits + tags
+  pull-requests: write # open a fallback PR if test/merge fails
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) detect — find out what PyPI has, compare against our pinned version.
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect new upstream zvec
+    runs-on: ubuntu-22.04
+    outputs:
+      current: ${{ steps.ver.outputs.current }}
+      latest: ${{ steps.ver.outputs.latest }}
+      has_update: ${{ steps.ver.outputs.has_update }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT=$(grep -m1 '^REF=' scripts/build-zvec.sh \
+            | sed -E 's/^REF="\$\{ZVEC_REF:-v([0-9.]+)\}"$/\1/')
+          if [[ -n "${{ inputs.version }}" ]]; then
+            LATEST="${{ inputs.version }}"
+            echo "using manual override: $LATEST"
+          else
+            LATEST=$(curl -sSfL https://pypi.org/pypi/zvec/json | jq -r '.info.version')
+          fi
+          if [[ -z "$LATEST" ]]; then
+            echo "::error::could not determine latest zvec version"
+            exit 1
+          fi
+          echo "current zvec pin: $CURRENT"
+          echo "latest zvec:      $LATEST"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST"   >> "$GITHUB_OUTPUT"
+          if [[ "$CURRENT" != "$LATEST" ]]; then
+            echo "has_update=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 2) bump — run the pin-bump script and push the auto-bump branch.
+  # ---------------------------------------------------------------------------
+  bump:
+    name: Bump pins to zvec ${{ needs.detect.outputs.latest }}
+    needs: detect
+    if: needs.detect.outputs.has_update == 'true'
+    runs-on: ubuntu-22.04
+    outputs:
+      branch: ${{ steps.push.outputs.branch }}
+      tag: ${{ steps.push.outputs.tag }}
+      crate_version: ${{ steps.push.outputs.crate_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt }
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq unzip
+
+      - name: Run pin bump
+        run: ./scripts/bump-zvec-pin.sh "${{ needs.detect.outputs.latest }}"
+
+      - id: push
+        name: Commit and push auto-bump branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEW_VER=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          TAG="v$NEW_VER"
+          BRANCH="auto-bump/zvec-v${{ needs.detect.outputs.latest }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore(deps): track zvec ${{ needs.detect.outputs.latest }}
+
+          Auto-bump from upstream-track.yml:
+          - zvec: ${{ needs.detect.outputs.current }} -> ${{ needs.detect.outputs.latest }}
+          - zvec-rs: bumped to $NEW_VER
+          "
+          git push -u origin "$BRANCH" --force-with-lease
+          echo "branch=$BRANCH"         >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"               >> "$GITHUB_OUTPUT"
+          echo "crate_version=$NEW_VER" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 3) test — run the bundled-feature matrix (same shape as ci.yml) against
+  # the bumped branch. If any leg fails, the fallback job opens a PR.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Verify bundled feature (${{ matrix.os }})
+    needs: bump
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump.outputs.branch }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+
+      - name: Install libclang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --no-default-features --features "${{ env.FEATURES }}" --all-targets --no-deps -- -D warnings
+
+      - name: Build
+        run: cargo build --no-default-features --features "${{ env.FEATURES }}" --verbose
+
+      - name: Test
+        shell: bash
+        run: |
+          LIB_DIR=$(ls -d target/debug/build/zvec-*/out/zvec-bundled/lib | head -1)
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            export DYLD_FALLBACK_LIBRARY_PATH="$LIB_DIR"
+          else
+            export LD_LIBRARY_PATH="$LIB_DIR"
+          fi
+          cargo test --no-default-features --features "${{ env.FEATURES }}" --verbose
+
+  # ---------------------------------------------------------------------------
+  # 4) merge-and-tag — land the bump on main and push the tag. Push intentionally
+  # uses GITHUB_TOKEN: the publish job below runs via workflow_call in the same
+  # run, so we don't need the tag-push to re-trigger release.yml.
+  # ---------------------------------------------------------------------------
+  merge-and-tag:
+    name: Fast-forward main + tag ${{ needs.bump.outputs.tag }}
+    needs: [bump, test]
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ needs.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward main and tag
+        shell: bash
+        env:
+          BRANCH: ${{ needs.bump.outputs.branch }}
+          TAG: ${{ needs.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin "$BRANCH":"$BRANCH"
+          git checkout main
+
+          # Guarantee a clean fast-forward. If main has moved past the
+          # point the bump branch forked from, we bail and let the PR
+          # fallback pick things up.
+          if ! git merge-base --is-ancestor "origin/main" "$BRANCH"; then
+            echo "::error::$BRANCH is not a descendant of main; aborting auto-merge"
+            exit 1
+          fi
+          git merge --ff-only "$BRANCH"
+          git tag -a "$TAG" -m "zvec-rs $TAG (tracks zvec ${{ needs.detect.outputs.latest }})"
+          git push origin main "$TAG"
+
+          # Tidy: remove the auto-bump branch now that it's on main.
+          git push origin --delete "$BRANCH" || true
+
+  # ---------------------------------------------------------------------------
+  # 5) publish — delegate to release.yml (workflow_call), which handles
+  # crates.io + GitHub Release.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish to crates.io
+    needs: merge-and-tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.merge-and-tag.outputs.tag }}
+    secrets: inherit
+    permissions:
+      contents: write
+
+  # ---------------------------------------------------------------------------
+  # Fallback: if the tests failed (or something after them), the bump branch
+  # is still on origin — surface it as a PR so someone can finish the job.
+  # ---------------------------------------------------------------------------
+  open-fallback-pr:
+    name: Open fallback PR (tests or merge failed)
+    needs: [bump, test, merge-and-tag]
+    if: |
+      always() &&
+      needs.bump.result == 'success' &&
+      (needs.test.result == 'failure' || needs.merge-and-tag.result == 'failure')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open PR for human review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ needs.bump.outputs.branch }}
+          TAG: ${{ needs.bump.outputs.tag }}
+          LATEST: ${{ needs.detect.outputs.latest }}
+          CURRENT: ${{ needs.detect.outputs.current }}
+        run: |
+          set -euo pipefail
+          TITLE="chore(deps): track zvec $LATEST (auto-bump, needs review)"
+          BODY=$(cat <<EOF
+          Automated upstream-tracking workflow bumped the pinned zvec
+          from \`$CURRENT\` to \`$LATEST\` on branch \`$BRANCH\`, but a
+          downstream step failed (tests or fast-forward merge).
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Next steps for a human:
+
+          1. Check the failing job's logs to see whether the upstream
+             release broke our wrappers, changed an enum, or just
+             tripped CI flakiness.
+          2. Push fixups to \`$BRANCH\` if needed.
+          3. Merge this PR; that puts the bump on main. Then tag
+             \`$TAG\` manually to trigger the publish workflow.
+          EOF
+          )
+          gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY" || \
+            echo "PR may already exist for $BRANCH; skipping"
