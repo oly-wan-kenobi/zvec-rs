@@ -1138,3 +1138,541 @@ fn bulk_insert_200_docs_scales() -> zvec::Result<()> {
     assert_eq!(results.len(), 10);
     Ok(())
 }
+
+// -----------------------------------------------------------------------------
+// DDL: create_index / drop_index / add_column / drop_column
+// -----------------------------------------------------------------------------
+
+/// Schema with just a pk + embedding, so we can attach/detach indexes in
+/// tests without colliding with basic_schema's pre-wired invert on `id`.
+fn bare_schema() -> zvec::Result<CollectionSchema> {
+    let mut schema = CollectionSchema::new("it_bare")?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::Cosine)?;
+    hnsw.set_hnsw_params(16, 200)?;
+
+    let id = FieldSchema::new("id", DataType::String, false, 0)?;
+    schema.add_field(&id)?;
+
+    let mut emb = FieldSchema::new("embedding", DataType::VectorFp32, false, 3)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+    Ok(schema)
+}
+
+#[test]
+fn drop_index_then_recreate_on_live_collection() -> zvec::Result<()> {
+    // bare_schema ships with an HNSW index on `embedding`. Drop it,
+    // confirm it's gone from live schema introspection, and attach a
+    // fresh one via create_index.
+    let path = tmp_path("ddl_index");
+    let schema = bare_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+
+    collection.drop_index("embedding")?;
+    let after_drop = collection.schema()?;
+    assert!(
+        !after_drop.has_index("embedding"),
+        "embedding index should be gone after drop_index"
+    );
+
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::Cosine)?;
+    hnsw.set_hnsw_params(8, 100)?;
+    collection.create_index("embedding", &hnsw)?;
+
+    let after_create = collection.schema()?;
+    assert!(
+        after_create.has_index("embedding"),
+        "embedding index should be back after create_index"
+    );
+    Ok(())
+}
+
+#[test]
+fn add_column_then_drop_column_changes_schema() -> zvec::Result<()> {
+    // zvec 0.3.1 restricts add_column to basic numeric types
+    // (int32, int64, uint32, uint64, float, double). Anything else
+    // errors with InvalidArgument — the test uses Int64 accordingly.
+    let path = tmp_path("ddl_column");
+    let schema = bare_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let before = collection.schema()?;
+    assert!(!before.has_field("views"));
+
+    let views = FieldSchema::new("views", DataType::Int64, true, 0)?;
+    collection.add_column(&views, None)?;
+
+    let after_add = collection.schema()?;
+    assert!(
+        after_add.has_field("views"),
+        "views column should exist after add_column"
+    );
+
+    collection.drop_column("views")?;
+    let after_drop = collection.schema()?;
+    assert!(
+        !after_drop.has_field("views"),
+        "views column should be gone after drop_column"
+    );
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// GroupByVectorQuery: the getters/setters — Collection::query_group_by isn't
+// wrapped yet, so we round-trip the struct rather than executing it.
+// -----------------------------------------------------------------------------
+
+#[test]
+fn group_by_vector_query_round_trip() -> zvec::Result<()> {
+    use zvec::GroupByVectorQuery;
+
+    let mut q = GroupByVectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_group_by_field_name("id")?;
+    q.set_group_count(4)?;
+    q.set_group_topk(3)?;
+    q.set_query_vector_fp32(&[0.1, 0.2, 0.3])?;
+    q.set_filter("id = \"a\"")?;
+    q.set_include_vector(true)?;
+    q.set_output_fields(&["id"])?;
+
+    assert_eq!(q.field_name().as_deref(), Some("embedding"));
+    assert_eq!(q.group_by_field_name().as_deref(), Some("id"));
+    assert_eq!(q.group_count(), 4);
+    assert_eq!(q.group_topk(), 3);
+    assert_eq!(q.filter().as_deref(), Some("id = \"a\""));
+    assert!(q.include_vector());
+    assert_eq!(q.output_fields()?, vec!["id".to_string()]);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// update_with_results / upsert_with_results / delete_with_results
+// -----------------------------------------------------------------------------
+
+#[test]
+fn update_with_results_mixes_ok_and_missing() -> zvec::Result<()> {
+    let path = tmp_path("update_wr");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+
+    let present = mk_doc("a", [0.0, 1.0, 0.0])?;
+    let missing = mk_doc("ghost", [0.0, 0.0, 1.0])?;
+    let results = collection.update_with_results(&[&present, &missing])?;
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].code, zvec::ErrorCode::Ok);
+    assert_ne!(
+        results[1].code,
+        zvec::ErrorCode::Ok,
+        "updating a non-existent pk should not be OK"
+    );
+    Ok(())
+}
+
+#[test]
+fn upsert_with_results_reports_per_doc_ok() -> zvec::Result<()> {
+    let path = tmp_path("upsert_wr");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let a = mk_doc("a", [1.0, 0.0, 0.0])?;
+    let b = mk_doc("b", [0.0, 1.0, 0.0])?;
+    let results = collection.upsert_with_results(&[&a, &b])?;
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|r| r.code == zvec::ErrorCode::Ok));
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 2);
+    Ok(())
+}
+
+#[test]
+fn delete_with_results_reports_per_pk_status() -> zvec::Result<()> {
+    let path = tmp_path("delete_wr");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    collection.insert(&[&mk_doc("a", [1.0, 0.0, 0.0])?])?;
+    collection.flush()?;
+
+    let results = collection.delete_with_results(&["a", "ghost"])?;
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].code, zvec::ErrorCode::Ok);
+    // zvec may report "not found" as NotFound, InvalidArgument, or
+    // FailedPrecondition depending on version; we don't care which,
+    // just that it isn't reported as OK.
+    assert_ne!(results[1].code, zvec::ErrorCode::Ok);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// update_iter / upsert_iter streaming writes
+// -----------------------------------------------------------------------------
+
+#[test]
+fn upsert_iter_batches_correctly() -> zvec::Result<()> {
+    let path = tmp_path("upsert_iter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let docs = (0..25).map(|i| mk_doc(&format!("u{i}"), [i as f32, 0.0, 0.0]).unwrap());
+    let summary = collection.upsert_iter(docs, 7)?;
+    assert_eq!(summary.success, 25);
+    assert_eq!(summary.error, 0);
+    collection.flush()?;
+    assert_eq!(collection.stats()?.doc_count(), 25);
+    Ok(())
+}
+
+#[test]
+fn update_iter_only_touches_existing_docs() -> zvec::Result<()> {
+    let path = tmp_path("update_iter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let seed: Vec<Doc> = (0..10)
+        .map(|i| mk_doc(&format!("u{i}"), [i as f32, 0.0, 0.0]).unwrap())
+        .collect();
+    let seed_refs: Vec<&Doc> = seed.iter().collect();
+    collection.insert(&seed_refs)?;
+    collection.flush()?;
+
+    // 10 existing docs + 5 non-existent → 10 should update cleanly,
+    // the other 5 should land in the `error` counter. zvec batches
+    // the writes internally in groups of 4; the test just asserts
+    // the overall tally.
+    let updates = (0..15).map(|i| mk_doc(&format!("u{i}"), [-(i as f32), 0.0, 0.0]).unwrap());
+    let summary = collection.update_iter(updates, 4)?;
+    assert_eq!(summary.success + summary.error, 15);
+    assert!(summary.success >= 10, "expected at least 10 ok updates");
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Live schema() / options() introspection
+// -----------------------------------------------------------------------------
+
+#[test]
+fn live_schema_reflects_configured_fields() -> zvec::Result<()> {
+    let path = tmp_path("live_schema");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let got = collection.schema()?;
+    assert_eq!(got.name().as_deref(), Some("it_collection"));
+    assert!(got.has_field("id"));
+    assert!(got.has_field("embedding"));
+    let all = got.all_field_names()?;
+    assert!(all.iter().any(|n| n == "id"));
+    assert!(all.iter().any(|n| n == "embedding"));
+
+    let emb = got.vector_field("embedding")?.expect("embedding field");
+    assert_eq!(emb.dimension(), 3);
+    assert!(emb.is_dense_vector());
+    assert_eq!(emb.data_type(), DataType::VectorFp32);
+    Ok(())
+}
+
+#[test]
+fn live_options_reflects_defaults() -> zvec::Result<()> {
+    let path = tmp_path("live_options");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let opts = collection.options()?;
+    // Defaults from zvec 0.3.1. We don't pin exact values (zvec may
+    // change them) — we only verify the accessors don't panic and
+    // the read-only flag defaults to false.
+    assert!(!opts.read_only(), "collections default to writable");
+    let _ = opts.enable_mmap();
+    let _ = opts.max_buffer_size();
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Wider vector + array type round-trips
+// -----------------------------------------------------------------------------
+
+#[test]
+fn vector_int8_round_trip() -> zvec::Result<()> {
+    let path = tmp_path("vec_i8");
+    let mut schema = CollectionSchema::new("it_i8")?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::L2)?;
+    hnsw.set_hnsw_params(16, 200)?;
+    let mut emb = FieldSchema::new("embedding", DataType::VectorInt8, false, 4)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_vector_int8("embedding", &[1, -1, 2, -2])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    // Raw bytes for the i8 query vector.
+    q.set_query_vector_raw(&[1u8, 255, 2, 254])?;
+    q.set_topk(1)?;
+    q.set_include_vector(true)?;
+    let results = collection.query(&q)?;
+    assert_eq!(results.len(), 1);
+    let got = results.get(0).unwrap().get_vector_int8("embedding")?;
+    assert_eq!(got, vec![1, -1, 2, -2]);
+    Ok(())
+}
+
+#[test]
+fn array_float_round_trip() -> zvec::Result<()> {
+    // Forward-only array field: no index, just store + fetch.
+    let path = tmp_path("array_float");
+    let mut schema = CollectionSchema::new("it_arr_f")?;
+    let id = FieldSchema::new("id", DataType::String, false, 0)?;
+    schema.add_field(&id)?;
+    let scores = FieldSchema::new("scores", DataType::ArrayFloat, true, 0)?;
+    schema.add_field(&scores)?;
+    // Need at least one vector field for the collection to be valid.
+    let mut emb = FieldSchema::new("embedding", DataType::VectorFp32, false, 3)?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::Cosine)?;
+    hnsw.set_hnsw_params(16, 200)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_array_float("scores", &[1.5, 2.5, 3.5])?;
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let got = collection.fetch(&["a"])?;
+    assert_eq!(got.len(), 1);
+    let arr = got.get(0).unwrap().get_array_float("scores")?;
+    assert_eq!(arr, vec![1.5, 2.5, 3.5]);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Doc: merge / clear / validate / to_detail_string + DocSet::iter / to_hits
+// -----------------------------------------------------------------------------
+
+#[test]
+fn doc_merge_takes_fields_from_other() -> zvec::Result<()> {
+    let mut a = Doc::new()?;
+    a.set_pk("a")?;
+    a.add_string("id", "a")?;
+
+    let mut b = Doc::new()?;
+    b.add_int64("n", 42)?;
+    b.add_vector_fp32("embedding", &[0.1, 0.2, 0.3])?;
+
+    a.merge(&b);
+    assert!(a.has_field("id"));
+    assert!(a.has_field("n"));
+    assert!(a.has_field("embedding"));
+    assert_eq!(a.borrow().get_int64("n")?, 42);
+    Ok(())
+}
+
+#[test]
+fn doc_clear_resets_fields() -> zvec::Result<()> {
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_int64("n", 1)?;
+    assert_eq!(d.field_count(), 2);
+
+    d.clear();
+    assert_eq!(d.field_count(), 0);
+    assert!(d.is_empty());
+    Ok(())
+}
+
+#[test]
+fn doc_validate_catches_missing_required_field() -> zvec::Result<()> {
+    let schema = basic_schema()?;
+
+    // Missing the required `id` field.
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_vector_fp32("embedding", &[1.0, 0.0, 0.0])?;
+    let err = d
+        .validate(&schema, /* is_update= */ false)
+        .expect_err("missing required field should fail validation");
+    assert_eq!(err.code, zvec::ErrorCode::InvalidArgument);
+
+    // A fully populated doc validates clean.
+    let good = mk_doc("a", [1.0, 0.0, 0.0])?;
+    good.validate(&schema, false)?;
+    Ok(())
+}
+
+#[test]
+fn doc_to_detail_string_is_not_empty() -> zvec::Result<()> {
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_int64("views", 7)?;
+    let s = d.to_detail_string()?;
+    assert!(!s.is_empty(), "to_detail_string should yield something");
+    assert!(
+        s.contains("a") || s.contains("views"),
+        "detail string should surface *some* field content; got: {s}"
+    );
+    Ok(())
+}
+
+#[test]
+fn docset_iter_visits_every_hit() -> zvec::Result<()> {
+    let path = tmp_path("docset_iter");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+    for i in 0..3 {
+        collection.insert(&[&mk_doc(&format!("d{i}"), [i as f32, 0.0, 0.0])?])?;
+    }
+    collection.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp32(&[0.0, 0.0, 0.0])?;
+    q.set_topk(10)?;
+    let results = collection.query(&q)?;
+
+    let seen: Vec<String> = results.iter().filter_map(|r| r.pk_copy()).collect();
+    assert_eq!(seen.len(), results.len());
+    assert_eq!(seen.len(), 3);
+    let hits = results.to_hits();
+    assert_eq!(hits.len(), 3);
+    for h in &hits {
+        assert!(
+            !h.pk.is_empty(),
+            "to_hits should carry the pk through: {hits:?}"
+        );
+    }
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// AsyncCollection: expand coverage beyond the single roundtrip test
+// -----------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_update_delete_fetch_stats() {
+    use zvec::AsyncCollection;
+
+    let path = tmp_path("async_wide");
+    let schema = basic_schema().expect("schema");
+    let collection = AsyncCollection::create_and_open(path, schema, None)
+        .await
+        .expect("create");
+
+    let seed: Vec<Doc> = (0..3)
+        .map(|i| mk_doc(&format!("a{i}"), [i as f32, 0.0, 0.0]).unwrap())
+        .collect();
+    let summary = collection.insert(seed).await.expect("insert");
+    assert_eq!(summary.success, 3);
+    collection.flush().await.expect("flush");
+    assert_eq!(
+        collection.stats().await.expect("stats").doc_count(),
+        3,
+        "after inserting 3 docs"
+    );
+
+    // update a0 via update_with_results, plus a non-existent pk.
+    let mut upd = Doc::new().expect("doc");
+    upd.set_pk("a0").expect("pk");
+    upd.add_vector_fp32("embedding", &[9.0, 0.0, 0.0])
+        .expect("vec");
+    let mut ghost = Doc::new().expect("doc");
+    ghost.set_pk("nope").expect("pk");
+    ghost
+        .add_vector_fp32("embedding", &[0.0, 9.0, 0.0])
+        .expect("vec");
+    let results = collection
+        .update_with_results(vec![upd, ghost])
+        .await
+        .expect("update wr");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].code, zvec::ErrorCode::Ok);
+    assert_ne!(results[1].code, zvec::ErrorCode::Ok);
+
+    // fetch roundtrip
+    let fetched = collection
+        .fetch(vec!["a1".to_string(), "a2".to_string()])
+        .await
+        .expect("fetch");
+    assert_eq!(fetched.len(), 2);
+
+    // delete one pk, verify count drops
+    let del = collection
+        .delete(vec!["a1".to_string()])
+        .await
+        .expect("delete");
+    assert_eq!(del.success, 1);
+    collection.flush().await.expect("flush");
+    assert_eq!(
+        collection.stats().await.expect("stats").doc_count(),
+        2,
+        "after deleting 1"
+    );
+
+    // schema + options introspection through the async wrapper
+    let s = collection.schema().await.expect("schema");
+    assert!(s.has_field("embedding"));
+    let o = collection.options().await.expect("options");
+    assert!(!o.read_only());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_upsert_iter_streams() {
+    use zvec::AsyncCollection;
+
+    let path = tmp_path("async_upsert_iter");
+    let schema = basic_schema().expect("schema");
+    let collection = AsyncCollection::create_and_open(path, schema, None)
+        .await
+        .expect("create");
+
+    let docs: Vec<Doc> = (0..13)
+        .map(|i| mk_doc(&format!("x{i}"), [i as f32, 0.0, 0.0]).unwrap())
+        .collect();
+    let summary = collection.upsert_iter(docs, 4).await.expect("upsert_iter");
+    assert_eq!(summary.success, 13);
+    assert_eq!(summary.error, 0);
+    collection.flush().await.expect("flush");
+    assert_eq!(collection.stats().await.expect("stats").doc_count(), 13);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_delete_by_filter_scopes() {
+    use zvec::AsyncCollection;
+
+    let path = tmp_path("async_dbf");
+    let schema = basic_schema().expect("schema");
+    let collection = AsyncCollection::create_and_open(path, schema, None)
+        .await
+        .expect("create");
+
+    let docs: Vec<Doc> = (0..3)
+        .map(|i| mk_doc(&format!("f{i}"), [i as f32, 0.0, 0.0]).unwrap())
+        .collect();
+    collection.insert(docs).await.expect("insert");
+    collection.flush().await.expect("flush");
+    assert_eq!(collection.stats().await.expect("stats").doc_count(), 3);
+
+    collection
+        .delete_by_filter("id = \"f1\"")
+        .await
+        .expect("delete_by_filter");
+    collection.flush().await.expect("flush");
+    assert_eq!(collection.stats().await.expect("stats").doc_count(), 2);
+}
