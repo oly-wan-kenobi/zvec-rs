@@ -1,0 +1,148 @@
+name: Source build
+
+# This workflow validates `scripts/build-zvec.sh` end-to-end by cloning
+# upstream zvec, compiling the full C++ tree (RocksDB + Arrow + Protobuf
+# + …, ~30 min on a free GH Actions runner), and running the Rust
+# rustfmt/clippy/test suite against the resulting libzvec_c_api.
+#
+# It does NOT gate every PR — the regular `CI` workflow's bundled-feature
+# matrix already exercises the full Rust surface against an
+# upstream-provided libzvec_c_api in ~1 min. This workflow exists to
+# catch:
+#   - rot in `scripts/build-zvec.sh` itself (e.g. flag changes)
+#   - upstream zvec source changes that break our build path before
+#     they hit users on platforms not covered by the wheel matrix
+#
+# Triggers: weekly cron (Mondays 06:00 UTC) and manual dispatch.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  ZVEC_REF: v0.3.1
+
+jobs:
+  build-zvec:
+    name: Build libzvec_c_api (from source)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    outputs:
+      cache-key: ${{ steps.meta.outputs.cache-key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute cache key
+        id: meta
+        run: |
+          echo "cache-key=zvec-${ZVEC_REF}-$(uname -s)-$(uname -m)-$(sha256sum scripts/build-zvec.sh | cut -c1-12)" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached zvec install
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: zvec-install
+          key: ${{ steps.meta.outputs.cache-key }}
+
+      - name: Free up runner disk
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Install build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential git patch ca-certificates \
+            pkg-config python3
+
+      - name: Diagnostics — disk + memory pre-build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          df -h
+          free -h
+          nproc
+          gcc --version
+
+      - name: Build libzvec_c_api via scripts/build-zvec.sh
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_GENERATOR: Ninja
+          # Cap parallel compile to keep peak RSS under the 16 GB runner.
+          # Arrow + RocksDB C++ templates are the most memory-hungry bits.
+          JOBS: "2"
+        run: |
+          scripts/build-zvec.sh "$PWD/zvec-install"
+
+      - name: Diagnostics — disk + memory post-build
+        if: always()
+        run: |
+          df -h || true
+          free -h || true
+          # Capture any OOM messages the kernel logged.
+          sudo dmesg | tail -200 || true
+
+      - name: Upload install prefix as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libzvec_c_api
+          path: zvec-install
+          retention-days: 7
+
+  lint-and-test:
+    name: rustfmt + clippy + tests (from-source lib)
+    needs: build-zvec
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libzvec_c_api
+          path: zvec-install
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install libclang (for bindgen)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
+
+      - name: Wire zvec install into the environment
+        run: |
+          ABS="$PWD/zvec-install"
+          echo "ZVEC_ROOT=$ABS"             >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$ABS/lib"   >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: Build (lib)
+        run: cargo build --verbose
+
+      - name: Clippy
+        run: cargo clippy --all-targets --no-deps -- -D warnings
+
+      - name: Build examples + tests
+        run: cargo build --all-targets --verbose
+
+      - name: Test
+        run: cargo test --verbose
+
+      - name: Run basic example
+        run: cargo run --example basic
