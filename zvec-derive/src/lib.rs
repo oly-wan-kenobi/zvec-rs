@@ -94,7 +94,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        #[allow(clippy::all)]
+        #[allow(clippy::deref_addrof)]
         impl #impl_generics ::zvec::IntoDoc for #name #ty_generics #where_clause {
             fn into_doc(&self) -> ::zvec::Result<::zvec::Doc> {
                 let mut __doc = ::zvec::Doc::new()?;
@@ -376,7 +376,6 @@ fn expand_from_doc(input: DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        #[allow(clippy::all)]
         impl #impl_generics ::zvec::FromDoc for #name #ty_generics #where_clause {
             fn from_doc(__doc: ::zvec::DocRef<'_>) -> ::zvec::Result<Self> {
                 Ok(Self {

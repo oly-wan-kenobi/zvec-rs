@@ -439,7 +439,18 @@ fn derive_into_and_from_doc_roundtrip() -> zvec::Result<()> {
     assert_eq!(got.id, "a");
     assert_eq!(got.title, "Hello");
     assert_eq!(got.body, "body text");
-    assert_eq!(got.embedding, vec![0.1, 0.2, 0.3]);
+    // zvec's cosine/HNSW pipeline can round-trip vectors with
+    // sub-ULP differences depending on the target's SIMD code path
+    // (arm64 macOS returns e.g. 0.099999994 where x86_64 Linux
+    // returns an exact 0.1). Compare with a small tolerance rather
+    // than `assert_eq!`.
+    assert_eq!(got.embedding.len(), 3);
+    for (actual, expected) in got.embedding.iter().zip([0.1_f32, 0.2, 0.3]) {
+        assert!(
+            (actual - expected).abs() < 1e-5,
+            "embedding component {actual} diverged from {expected} by more than 1e-5",
+        );
+    }
     assert_eq!(got.views, 42);
     assert_eq!(got.summary.as_deref(), Some("short summary"));
     assert_eq!(got.audit, 0, "skipped field should default");
