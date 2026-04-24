@@ -79,6 +79,7 @@ impl VectorQuery {
     ///
     /// Available with the `half` cargo feature.
     #[cfg(feature = "half")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "half")))]
     pub fn set_query_vector_fp16(&mut self, vec: &[half::f16]) -> Result<()> {
         // SAFETY: `half::f16` is `#[repr(transparent)]` over `u16`.
         let bits: &[u16] =

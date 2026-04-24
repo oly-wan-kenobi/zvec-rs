@@ -1,5 +1,11 @@
 # zvec-rs
 
+[![CI](https://github.com/oly-wan-kenobi/zvec-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/oly-wan-kenobi/zvec-rs/actions/workflows/ci.yml)
+[![docs.rs](https://img.shields.io/docsrs/zvec?label=docs.rs)](https://docs.rs/zvec)
+[![crates.io](https://img.shields.io/crates/v/zvec.svg?label=crates.io)](https://crates.io/crates/zvec)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![MSRV 1.75](https://img.shields.io/badge/MSRV-1.75-informational.svg)
+
 Rust bindings to [zvec](https://github.com/alibaba/zvec), Alibaba's
 lightweight, in-process vector database.
 

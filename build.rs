@@ -230,6 +230,12 @@ mod bundled {
     /// in which case the caller continues with the regular linker
     /// discovery flow.
     pub(crate) fn materialize() -> Option<PathBuf> {
+        // docs.rs sandbox: no network, no linking. Skip the wheel fetch so
+        // the crate documents cleanly with `--all-features`.
+        if env::var_os("DOCS_RS").is_some() {
+            return None;
+        }
+
         // Local override — useful for air-gapped builds or TLS-restricted
         // networks. If set, we trust the file is a matching zvec wheel.
         let local_wheel = env::var_os("ZVEC_BUNDLED_WHEEL_PATH").map(PathBuf::from);

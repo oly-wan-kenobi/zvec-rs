@@ -143,7 +143,7 @@ impl WeightedReRanker {
     }
 
     /// Fuse `lists`. Panics if the number of lists doesn't match
-    /// [`self.weights`]. Returns hits sorted by descending fused score.
+    /// [`Self::weights`]. Returns hits sorted by descending fused score.
     pub fn fuse<L, I>(&self, lists: L) -> Vec<Hit>
     where
         L: IntoIterator<Item = I>,

@@ -81,7 +81,10 @@ path = "examples/json_ingest.rs"
 required-features = ["serde-json"]
 
 [package.metadata.docs.rs]
-# docs.rs has no zvec library installed, so we skip linking entirely and
-# only emit the FFI declarations.
+# docs.rs doesn't have a zvec library installed, so we skip linking via
+# the DOCS_RS env var (see build.rs) and only emit the FFI declarations.
+# Enabling every optional feature makes the full surface (AsyncCollection,
+# IntoDoc derive, from_json, half::f16 helpers, rerankers, hybrid search,
+# …) show up with proper `doc(cfg)` feature badges.
+all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-features = []
