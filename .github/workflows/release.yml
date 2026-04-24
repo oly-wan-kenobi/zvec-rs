@@ -1,0 +1,127 @@
+name: Release
+
+# Cuts a release when you push a `v*.*.*` tag:
+#   1. Checks out the tagged commit and verifies the tag matches the
+#      version in Cargo.toml.
+#   2. Publishes `zvec-derive` to crates.io.
+#   3. Waits for the crates.io sparse index to surface the new version
+#      (usually 30-90 seconds).
+#   4. Publishes `zvec` to crates.io.
+#   5. Creates a GitHub Release with the matching CHANGELOG section.
+#
+# One-time setup: add `CARGO_REGISTRY_TOKEN` to the repo's
+# Settings → Secrets and variables → Actions. The token comes from
+# https://crates.io/me — pick a scope of "publish-update" and lock it
+# to crates `zvec` and `zvec-derive` if you want the smallest blast
+# radius.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0). Required for manual runs."
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io + cut GitHub Release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write     # needed to create the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve tag + version
+        id: meta
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          ZVEC_VER=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          DERIVE_VER=$(grep -m1 '^version = ' zvec-derive/Cargo.toml | cut -d'"' -f2)
+          if [[ "$VERSION" != "$ZVEC_VER" ]]; then
+            echo "::error::tag $TAG (version $VERSION) doesn't match zvec Cargo.toml version $ZVEC_VER"
+            exit 1
+          fi
+          if [[ "$VERSION" != "$DERIVE_VER" ]]; then
+            echo "::error::tag $TAG (version $VERSION) doesn't match zvec-derive Cargo.toml version $DERIVE_VER"
+            exit 1
+          fi
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libclang (bindgen needs it during verify)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish zvec-derive
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p zvec-derive
+
+      - name: Wait for crates.io to index zvec-derive ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The sparse index lays out crate metadata at
+          # https://index.crates.io/<first-2-letters>/<next-2>/<name>
+          # for crates with names ≥ 4 chars.
+          URL="https://index.crates.io/zv/ec/zvec-derive"
+          for attempt in $(seq 1 60); do
+            if curl -sSfL "$URL" | grep -q "\"vers\":\"${{ steps.meta.outputs.version }}\""; then
+              echo "zvec-derive ${{ steps.meta.outputs.version }} is indexed"
+              exit 0
+            fi
+            echo "attempt $attempt: not yet indexed, sleeping 5s"
+            sleep 5
+          done
+          echo "::error::timed out waiting for zvec-derive ${{ steps.meta.outputs.version }} on crates.io index"
+          exit 1
+
+      - name: Publish zvec
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # `cargo publish` runs `cargo build` to verify; the bundled
+          # feature gives it a libzvec_c_api to link against without
+          # any external setup.
+          ZVEC_BUNDLED_BUILD: "1"
+        run: cargo publish -p zvec --features bundled
+
+      - name: Extract CHANGELOG section for ${{ steps.meta.outputs.tag }}
+        id: notes
+        run: |
+          set -euo pipefail
+          # Pull the section between [VERSION] and the next [...] header.
+          awk -v ver="${{ steps.meta.outputs.version }}" '
+            $0 ~ "^## \\[" ver "\\]" { in_section = 1; next }
+            in_section && /^## \[/    { exit }
+            in_section                { print }
+          ' CHANGELOG.md > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            echo "## zvec ${{ steps.meta.outputs.version }}" > release-notes.md
+            echo "" >> release-notes.md
+            echo "See [CHANGELOG.md](CHANGELOG.md)." >> release-notes.md
+          fi
+          echo "----- release notes -----"
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: zvec ${{ steps.meta.outputs.version }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
