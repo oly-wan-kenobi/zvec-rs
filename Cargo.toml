@@ -19,12 +19,22 @@ exclude = [
 default = []
 # Try pkg-config first to locate the zvec C API library.
 pkg-config = ["dep:pkg-config"]
+# Download upstream zvec's PyPI wheel at build time and extract
+# `libzvec_c_api.so` (or the platform equivalent) plus `c_api.h` into
+# `OUT_DIR`, then link against that. Supported targets: Linux x86_64 /
+# aarch64, macOS arm64, Windows x86_64. On unsupported targets the build
+# falls back to the regular `ZVEC_LIB_DIR` / `ZVEC_ROOT` / `pkg-config`
+# discovery flow.
+bundled = ["dep:ureq", "dep:zip", "dep:sha2"]
 
 [dependencies]
 
 [build-dependencies]
 bindgen = "0.70"
 pkg-config = { version = "0.3", optional = true }
+ureq = { version = "2.10", default-features = false, features = ["tls"], optional = true }
+zip = { version = "2.2", default-features = false, features = ["deflate"], optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [[example]]
 name = "version"

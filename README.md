@@ -56,6 +56,38 @@ fn main() -> zvec::Result<()> {
 
 See `examples/basic.rs` for the Rust port of zvec's own `basic_example.c`.
 
+## Zero-setup builds with the `bundled` feature
+
+The simplest way to try the crate is to enable the `bundled` cargo feature,
+which downloads the upstream zvec PyPI wheel at build time, verifies its
+SHA-256, extracts `libzvec_c_api` + `c_api.h` into `$OUT_DIR`, and wires the
+linker to point at it. No external zvec build needed.
+
+```toml
+[dependencies]
+zvec = { version = "0.1", features = ["bundled"] }
+```
+
+```sh
+cargo test --features bundled
+```
+
+Supported targets (matching the wheels upstream publishes):
+
+- `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
+- `aarch64-apple-darwin`
+- `x86_64-pc-windows-msvc`
+
+Any other target falls through to the source-build / env-var path below.
+
+Overrides:
+
+- `ZVEC_BUNDLED_WHEEL_URL` + `ZVEC_BUNDLED_WHEEL_SHA256` — fetch a different
+  wheel (e.g. a newer release or a mirror).
+- `ZVEC_BUNDLED_WHEEL_PATH` — skip the network and use a local wheel file
+  (useful for air-gapped or TLS-restricted builds).
+
 ## Building `libzvec_c_api` from source
 
 The crate links against `libzvec_c_api` — a shared library produced by zvec's
