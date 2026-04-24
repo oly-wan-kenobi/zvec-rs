@@ -192,6 +192,50 @@ fn builder_roundtrip() -> zvec::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "half")]
+#[test]
+fn fp16_roundtrip() -> zvec::Result<()> {
+    use half::f16;
+
+    let mut schema = CollectionSchema::new("fp16_collection")?;
+    let mut invert = IndexParams::new(IndexType::Invert)?;
+    invert.set_invert_params(true, false)?;
+    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
+    hnsw.set_metric_type(MetricType::L2)?;
+    hnsw.set_hnsw_params(16, 200)?;
+
+    let mut id = FieldSchema::new("id", DataType::String, false, 0)?;
+    id.set_index_params(&invert)?;
+    schema.add_field(&id)?;
+    let mut emb = FieldSchema::new("embedding", DataType::VectorFp16, false, 3)?;
+    emb.set_index_params(&hnsw)?;
+    schema.add_field(&emb)?;
+
+    let path = tmp_path("fp16");
+    let coll = Collection::create_and_open(&path, &schema, None)?;
+
+    let v = [f16::from_f32(0.25), f16::from_f32(0.5), f16::from_f32(0.75)];
+    let mut d = Doc::new()?;
+    d.set_pk("a")?;
+    d.add_string("id", "a")?;
+    d.add_vector_fp16("embedding", &v)?;
+    coll.insert(&[&d])?;
+    coll.flush()?;
+
+    let mut q = VectorQuery::new()?;
+    q.set_field_name("embedding")?;
+    q.set_query_vector_fp16(&v)?;
+    q.set_topk(1)?;
+    q.set_include_vector(true)?;
+    let results = coll.query(&q)?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).and_then(|r| r.pk_copy()).as_deref(),
+        Some("a")
+    );
+    Ok(())
+}
+
 #[test]
 fn insert_iter_batches_correctly() -> zvec::Result<()> {
     let path = tmp_path("insert_iter");

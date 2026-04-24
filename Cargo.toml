@@ -29,9 +29,14 @@ bundled = ["dep:ureq", "dep:zip", "dep:sha2"]
 # JSON <-> Doc bridge: `Doc::from_json(&serde_json::Value, &CollectionSchema)`.
 # Pulls in `serde_json` as a runtime dependency.
 serde-json = ["dep:serde_json"]
+# Typed `half::f16` vector helpers. Without this feature, FP16 vectors
+# are only reachable through the raw `add_vector_fp16_bits(&[u16])` /
+# `get_vector_fp16_bits` entry points.
+half = ["dep:half"]
 
 [dependencies]
 serde_json = { version = "1", optional = true }
+half = { version = "2", optional = true }
 
 [build-dependencies]
 bindgen = "0.70"
