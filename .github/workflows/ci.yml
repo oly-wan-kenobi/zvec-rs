@@ -138,9 +138,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
       # macOS runners ship a working clang / libclang out of the box.
       - uses: Swatinem/rust-cache@v2
-      - name: Build with --features bundled
-        run: cargo build --no-default-features --features bundled --verbose
-      - name: Test with --features bundled
+      - name: Build with --features bundled,serde-json
+        run: cargo build --no-default-features --features "bundled serde-json" --verbose
+      - name: Test with --features bundled,serde-json
         shell: bash
         run: |
           # Point the dynamic-library search path at the wheel extraction dir
@@ -152,4 +152,4 @@ jobs:
           else
             export LD_LIBRARY_PATH="$LIB_DIR"
           fi
-          cargo test --no-default-features --features bundled --verbose
+          cargo test --no-default-features --features "bundled serde-json" --verbose

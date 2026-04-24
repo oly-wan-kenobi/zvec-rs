@@ -116,6 +116,8 @@ mod query;
 mod query_params;
 pub mod rerank;
 mod schema;
+#[cfg(feature = "serde-json")]
+mod serde_json_bridge;
 mod stats;
 mod types;
 mod version;

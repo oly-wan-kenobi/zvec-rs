@@ -116,6 +116,47 @@ fn delete_then_query_empty() -> zvec::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "serde-json")]
+#[test]
+fn from_json_roundtrip() -> zvec::Result<()> {
+    let path = tmp_path("from_json");
+    let schema = basic_schema()?;
+    let collection = Collection::create_and_open(&path, &schema, None)?;
+
+    let value = serde_json::json!({
+        "_pk": "doc1",
+        "id": "doc1",
+        "embedding": [0.1, 0.2, 0.3],
+    });
+    let d = Doc::from_json(&value, &schema)?;
+    collection.insert(&[&d])?;
+    collection.flush()?;
+
+    let results = collection.fetch(&["doc1"])?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).and_then(|r| r.pk_copy()).as_deref(),
+        Some("doc1")
+    );
+    Ok(())
+}
+
+#[cfg(feature = "serde-json")]
+#[test]
+fn from_json_rejects_unknown_field() -> zvec::Result<()> {
+    let schema = basic_schema()?;
+    let value = serde_json::json!({ "_pk": "x", "id": "x", "nope": 1 });
+    match Doc::from_json(&value, &schema) {
+        Ok(_) => panic!("unknown field should error"),
+        Err(err) => {
+            assert_eq!(err.code, zvec::ErrorCode::InvalidArgument);
+            let msg = err.message.unwrap_or_default();
+            assert!(msg.contains("nope"), "unexpected message: {msg}");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn schema_introspection() -> zvec::Result<()> {
     let schema = basic_schema()?;
