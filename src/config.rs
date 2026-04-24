@@ -1,4 +1,20 @@
-//! Logging and global configuration objects passed to [`initialize`].
+//! Process-wide configuration for zvec.
+//!
+//! Basic usage doesn't need any of this — zvec auto-initializes on first
+//! use with sensible defaults. Reach for [`initialize`] when you want to
+//! control memory limits, worker-thread counts, or routing logs to a
+//! file via [`LogConfig`].
+//!
+//! ```no_run
+//! # fn main() -> zvec::Result<()> {
+//! use zvec::{initialize, Config, LogConfig, LogLevel};
+//!
+//! let mut cfg = Config::new()?;
+//! cfg.set_memory_limit_bytes(2 * 1024 * 1024 * 1024)?; // 2 GiB
+//! cfg.set_log_config(LogConfig::console(LogLevel::Info)?)?;
+//! initialize(Some(&cfg))?;
+//! # Ok(()) }
+//! ```
 
 use std::ptr::NonNull;
 

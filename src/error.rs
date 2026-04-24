@@ -1,3 +1,11 @@
+//! Error handling primitives.
+//!
+//! [`ZvecError`] is the error type returned by every fallible call in
+//! this crate. It carries a strongly-typed [`ErrorCode`] plus the
+//! last-error message from the C API, when zvec attached one. The
+//! [`Result`] alias (`Result<T, ZvecError>`) is what the rest of the
+//! crate uses.
+
 use core::fmt;
 use std::ffi::CStr;
 

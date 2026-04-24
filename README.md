@@ -6,40 +6,36 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![MSRV 1.75](https://img.shields.io/badge/MSRV-1.75-informational.svg)
 
-Rust bindings to [zvec](https://github.com/alibaba/zvec), Alibaba's
-lightweight, in-process vector database.
+Safe, idiomatic Rust bindings to [zvec](https://github.com/alibaba/zvec) —
+Alibaba's lightweight, in-process vector database.
 
-zvec-rs has two layers:
+- **Full coverage** of upstream's C API: schemas, index params, DDL/DML/DQL,
+  hybrid retrieval, result fusion, stats.
+- **RAII everywhere:** every owning wrapper frees its C-side handle on drop,
+  every fallible call returns `Result<T, ZvecError>`.
+- **Three ways to link:** zero-setup `bundled` feature (pulls upstream's
+  PyPI wheel), reproducible source build via a helper script, or point at an
+  existing install.
+- **Optional niceties:** `tokio` async wrapper, `#[derive(IntoDoc)]` /
+  `#[derive(FromDoc)]` macros, JSON ingest, half-precision vectors.
 
-- **Raw FFI** in [`zvec::sys`](src/sys.rs), generated at build time by
-  `bindgen` from a pinned copy of upstream's `c_api.h` (`vendor/c_api.h`).
-- **Safe wrappers** at the crate root (and in submodules) that cover the
-  full public C API — schemas, index parameters, collections, documents,
-  queries, stats, and global configuration — with RAII `Drop`s and
-  `Result<T, ZvecError>` on every fallible path.
-
-The crate pins zvec **v0.3.1** — that is the version whose `c_api.h` is
-vendored here, whose wheel the `bundled` feature downloads, and whose git
-tag `scripts/build-zvec.sh` checks out by default.
+Pinned zvec version: **v0.3.1**.
 
 ---
 
 ## Contents
 
 - [Quickstart](#quickstart)
-- [Picking an install path](#picking-an-install-path)
-  - [Option A: the `bundled` cargo feature](#option-a-the-bundled-cargo-feature)
-  - [Option B: build `libzvec_c_api` from source](#option-b-build-libzvec_c_api-from-source)
-  - [Option C: point at an existing install](#option-c-point-at-an-existing-install)
-- [Environment variable reference](#environment-variable-reference)
+- [Install](#install)
+  - [A. `bundled` feature (recommended)](#a-bundled-feature-recommended)
+  - [B. Build from source](#b-build-from-source)
+  - [C. Point at an existing install](#c-point-at-an-existing-install)
 - [Cargo features](#cargo-features)
-- [Supported targets](#supported-targets)
-- [API tour](#api-tour)
+- [Environment variables](#environment-variables)
+- [Examples](#examples)
+- [API overview](#api-overview)
 - [Thread safety](#thread-safety)
-- [Running the examples and tests](#running-the-examples-and-tests)
-- [Cookbook](#cookbook)
 - [Comparison to `igobypenn/zvec-rust-binding`](#comparison-to-igobypennzvec-rust-binding)
-- [Repository layout](#repository-layout)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -53,28 +49,18 @@ zvec = { version = "0.1", features = ["bundled"] }
 ```
 
 ```rust
-use zvec::{
-    Collection, CollectionSchema, DataType, Doc, FieldSchema, IndexParams,
-    IndexType, MetricType, VectorQuery,
-};
+use zvec::{Collection, CollectionSchema, Doc, FieldSchema, MetricType, VectorQuery};
 
 fn main() -> zvec::Result<()> {
-    // Build a schema: PK + text field with an inverted index, plus a 3-D
-    // HNSW vector field.
-    let mut schema = CollectionSchema::new("docs")?;
-
-    let mut invert = IndexParams::new(IndexType::Invert)?;
-    invert.set_invert_params(true, false)?;
-    let mut id = FieldSchema::new("id", DataType::String, false, 0)?;
-    id.set_index_params(&invert)?;
-    schema.add_field(&id)?;
-
-    let mut hnsw = IndexParams::new(IndexType::Hnsw)?;
-    hnsw.set_metric_type(MetricType::Cosine)?;
-    hnsw.set_hnsw_params(16, 200)?;
-    let mut emb = FieldSchema::new("embedding", DataType::VectorFp32, false, 3)?;
-    emb.set_index_params(&hnsw)?;
-    schema.add_field(&emb)?;
+    // Schema: text id (inverted index) + 3-D HNSW cosine embedding.
+    let schema = CollectionSchema::builder("docs")
+        .field(FieldSchema::string("id").invert_index(true, false))
+        .field(
+            FieldSchema::vector_fp32("embedding", 3)
+                .hnsw(16, 200)
+                .metric(MetricType::Cosine),
+        )
+        .build()?;
 
     let collection = Collection::create_and_open("./my_coll", &schema, None)?;
 
@@ -85,10 +71,11 @@ fn main() -> zvec::Result<()> {
     collection.insert(&[&doc])?;
     collection.flush()?;
 
-    let mut q = VectorQuery::new()?;
-    q.set_field_name("embedding")?;
-    q.set_query_vector_fp32(&[0.1, 0.2, 0.3])?;
-    q.set_topk(10)?;
+    let q = VectorQuery::builder()
+        .field("embedding")
+        .vector_fp32(&[0.1, 0.2, 0.3])
+        .topk(10)
+        .build()?;
     for row in collection.query(&q)?.iter() {
         println!("{:?} score={}", row.pk_copy(), row.score());
     }
@@ -96,388 +83,228 @@ fn main() -> zvec::Result<()> {
 }
 ```
 
-A faithful Rust port of zvec's own `examples/c/basic_example.c` lives at
-[`examples/basic.rs`](examples/basic.rs).
+Longer walk-throughs live under [`examples/`](examples/); see
+[Examples](#examples) below for a tour.
 
 ---
 
-## Picking an install path
+## Install
 
-zvec-rs **links against** a prebuilt `libzvec_c_api` — it does not try to
-compile zvec from source in its own `build.rs` by default. Three supported
-install paths, fastest-first:
+zvec-rs **links** against a prebuilt `libzvec_c_api`; it does not compile
+zvec from source during `cargo build`. Pick one of three paths:
 
-| Path | When it's best | Time on a clean build | Network? | Platforms |
-|---|---|---|---|---|
-| **`bundled` feature** | Local dev, CI, anything where a small binary download is fine | ~30 s | Yes (PyPI) | Upstream wheel matrix |
-| **`scripts/build-zvec.sh`** | Targets upstream doesn't ship a wheel for; stricter supply-chain needs | 20–30 min first time, cached afterwards | Yes (git clone + submodules, ~500 MB) | Any platform zvec compiles on |
-| **External prebuilt** | You already have zvec installed | 0 s | No | Any |
+| Path | When | First-build time | Network |
+|---|---|---|---|
+| **`bundled` feature** | Dev, CI, anything where a small download is fine | ~30 s | Yes (PyPI wheel) |
+| **Source build helper** | Targets upstream doesn't ship a wheel for; strict supply-chain requirements | 20–30 min (cached afterwards) | Yes (git clone + submodules) |
+| **External prebuilt** | zvec already installed on the system | 0 s | No |
 
-### Option A: the `bundled` cargo feature
-
-With `--features bundled`, `build.rs` downloads the pinned zvec PyPI wheel
-for the current `TARGET`, verifies its SHA-256, and extracts
-`libzvec_c_api` + `c_api.h` into `$OUT_DIR/zvec-bundled/`. The linker
-search path and rpath are wired so the resulting binary finds the library
-without any `LD_LIBRARY_PATH` dance.
+### A. `bundled` feature (recommended)
 
 ```toml
 [dependencies]
 zvec = { version = "0.1", features = ["bundled"] }
 ```
 
-```sh
-cargo build --features bundled
-cargo test  --features bundled
-```
+`build.rs` downloads upstream's pinned PyPI wheel for the current target,
+verifies its SHA-256, extracts `libzvec_c_api` + `c_api.h`, and wires up
+the linker (rpath included) so the resulting binary works out of the box.
 
-Escape hatches:
+If your target isn't in the wheel matrix (see
+[Supported targets](#supported-targets)), `build.rs` emits a `cargo:warning`
+and falls back to discovery via env vars / pkg-config.
 
-- `ZVEC_BUNDLED_WHEEL_URL` + `ZVEC_BUNDLED_WHEEL_SHA256` — override the pin
-  (e.g. test a newer upstream release or use a local mirror).
-- `ZVEC_BUNDLED_WHEEL_PATH` — skip the network entirely and point at a
-  local `.whl` file. Useful for air-gapped or TLS-restricted environments.
-
-If the target isn't in the wheel matrix, `build.rs` emits a `cargo:warning`
-and falls through to Option C (i.e. `ZVEC_LIB_DIR` / `ZVEC_ROOT` /
-`pkg-config` discovery).
-
-### Option B: build `libzvec_c_api` from source
-
-Use [`scripts/build-zvec.sh`](scripts/build-zvec.sh) to clone upstream's
-repository at the matching tag, run CMake, and install a flat
-`{lib,include}` prefix that the crate can consume:
+### B. Build from source
 
 ```sh
 ./scripts/build-zvec.sh "$PWD/zvec-install"
 
 export ZVEC_ROOT="$PWD/zvec-install"
 export LD_LIBRARY_PATH="$ZVEC_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-cargo test
+cargo build
 ```
 
-Requirements on the build host: `cmake ≥ 3.13`, `ninja` (or `make`), a
-C++17 compiler, `git`, `patch`, and `libclang` (needed by bindgen when this
-crate itself compiles). The build pulls in RocksDB, Apache Arrow, Protobuf,
-glog, gflags, ANTLR, LZ4, CRoaring, and RaBitQ as git submodules and
-compiles them all — budget 20–30 minutes for the first run.
+The script clones upstream at `v0.3.1`, runs CMake, and installs a flat
+`{lib,include}` prefix. Requires CMake ≥ 3.13, a C++17 compiler, git,
+patch, and libclang.
 
-Script overrides:
+Script overrides: `ZVEC_REF`, `ZVEC_REPO`, `ZVEC_SRC_DIR`,
+`ZVEC_BUILD_DIR`, `CMAKE_GENERATOR`, `JOBS`.
 
-| Variable          | Default                              | Purpose                         |
-|-------------------|--------------------------------------|---------------------------------|
-| `ZVEC_REF`        | `v0.3.1`                             | Git ref to check out            |
-| `ZVEC_REPO`       | `https://github.com/alibaba/zvec`    | Upstream repository URL         |
-| `ZVEC_SRC_DIR`    | *(clone into `.zvec-build-work/`)*   | Use an existing checkout        |
-| `ZVEC_BUILD_DIR`  | `.zvec-build-work/build`             | CMake build directory           |
-| `CMAKE_GENERATOR` | `Unix Makefiles`                     | e.g. `Ninja`                    |
-| `JOBS`            | `nproc`                              | Parallel build jobs             |
-
-### Option C: point at an existing install
-
-If zvec is already on the system (via a package manager, your own build, or
-a prior run of Option A or B), hand `build.rs` a location:
+### C. Point at an existing install
 
 ```sh
-# Flat install prefix: $ZVEC_ROOT/lib and $ZVEC_ROOT/include/zvec/c_api.h
+# Install prefix (expects $ZVEC_ROOT/lib + $ZVEC_ROOT/include/zvec/c_api.h):
 export ZVEC_ROOT=/opt/zvec
-cargo build
 
-# Or just the library dir (header comes from vendor/c_api.h):
+# Or just the library dir; the header is picked up from vendor/c_api.h:
 export ZVEC_LIB_DIR=/opt/zvec/lib
-cargo build
 
-# Or a pkg-config file:
+# Or via pkg-config:
 cargo build --features pkg-config
 ```
 
----
+### Supported targets (bundled)
 
-## Environment variable reference
-
-Recognised by `build.rs` on every build:
-
-| Variable                     | Purpose                                                                 |
-|------------------------------|-------------------------------------------------------------------------|
-| `ZVEC_ROOT`                  | Install prefix (`lib/`, `include/zvec/`). Overrides headers + lib path. |
-| `ZVEC_LIB_DIR`               | Directory containing `libzvec_c_api`.                                   |
-| `ZVEC_INCLUDE_DIR`           | Directory containing `zvec/c_api.h`.                                    |
-| `ZVEC_STATIC=1`              | Link `zvec_c_api` statically instead of as a shared library.            |
-| `ZVEC_BUNDLED_WHEEL_URL`     | Custom wheel URL (feature: `bundled`). Requires the companion SHA.      |
-| `ZVEC_BUNDLED_WHEEL_SHA256`  | Expected SHA-256 for the wheel at `ZVEC_BUNDLED_WHEEL_URL`.             |
-| `ZVEC_BUNDLED_WHEEL_PATH`    | Local wheel file to use instead of downloading (feature: `bundled`).    |
-
----
-
-## Cargo features
-
-| Feature      | Effect                                                                                                                               |
-|--------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| *(default)*  | Build the crate. Expect `ZVEC_ROOT` / `ZVEC_LIB_DIR` / pkg-config / a system-installed lib to provide `libzvec_c_api` at link time.  |
-| `bundled`    | Download + extract the upstream PyPI wheel at build time. Pulls in `ureq`, `zip`, and `sha2` as build-dependencies.                  |
-| `pkg-config` | Probe for a system `zvec_c_api.pc` after the env vars are consulted.                                                                 |
-
----
-
-## Supported targets
-
-`bundled` is pinned to the wheels upstream publishes (cp311 ABI, but the
-extracted `libzvec_c_api` is Python-independent):
+The wheel matrix upstream ships; the extracted library is
+Python-independent.
 
 - `x86_64-unknown-linux-gnu`
 - `aarch64-unknown-linux-gnu`
 - `aarch64-apple-darwin`
 - `x86_64-pc-windows-msvc`
 
-The crate itself — raw FFI + safe wrappers — is not target-specific. Any
-platform that zvec's CMake build produces a `libzvec_c_api` for works via
-Options B or C.
+Any platform zvec's CMake build targets works via paths B or C.
 
 ---
 
-## API tour
+## Cargo features
 
-The safe wrappers live in several modules, all re-exported at the crate
-root.
+| Feature       | Effect |
+|---------------|--------|
+| *(default)*   | Expects `libzvec_c_api` on the linker path via env vars / pkg-config / system paths. |
+| `bundled`     | Download + extract upstream's PyPI wheel at build time. |
+| `derive`      | `#[derive(IntoDoc)]` / `#[derive(FromDoc)]` for struct ↔ `Doc` conversion. |
+| `tokio`       | `AsyncCollection` — every op runs in `tokio::task::spawn_blocking`. |
+| `serde-json`  | `Doc::from_json(&Value, &schema)` for JSON → `Doc` ingest. |
+| `half`        | `Doc::{add,get}_vector_fp16` + `VectorQuery::set_query_vector_fp16` take `&[half::f16]`. |
+| `pkg-config`  | Probe for a system `zvec_c_api.pc` in addition to the env-var dance. |
 
-- `zvec::Collection` — `create_and_open`, `open`, `close`, `flush`,
-  `optimize`; DDL (`create_index`, `drop_index`, `add_column`, `drop_column`,
-  `alter_column`); DML (`insert`, `update`, `upsert`, `delete` and the
-  `*_with_results` variants + `delete_by_filter`); DQL (`query`, `fetch`)
-  returning a `DocSet` that cleans up its zvec-allocated buffer on drop.
-- `zvec::CollectionSchema` + `zvec::FieldSchema` (+ non-owning
-  `FieldSchemaRef<'_>`) — schema creation, field manipulation, validation,
-  field enumeration, and index DDL.
-- `zvec::IndexParams` — typed setters for HNSW (`m`, `ef_construction`), IVF
-  (`n_list`, `n_iters`, `use_soar`), and inverted (`enable_range_opt`,
-  `enable_extended_wildcard`) index parameters.
-- `zvec::{HnswQueryParams, IvfQueryParams, FlatQueryParams}` — query-side
-  tuning (`ef`, `nprobe`, `radius`, `is_linear`, refiner), transferable into
-  a query via `VectorQuery::set_*_params`.
-- `zvec::{VectorQuery, GroupByVectorQuery}` — all fields/knobs from the C
-  API, plus `set_query_vector_fp32` / `_fp64` for typed vector inputs.
-- `zvec::HybridSearch` — runs N `VectorQuery`s and fuses the result
-  lists with [`zvec::rerank::RrfReRanker`] (default) or
-  [`zvec::rerank::WeightedReRanker`]. Cookbook example below.
-- `zvec::Doc` (+ non-owning `DocRef<'_>`) — primary key and per-field
-  setters (`add_string`, `add_float`, `add_vector_fp32`,
-  `add_vector_int8`, `add_vector_fp16_bits`, `add_vector_int4_packed`,
-  `add_vector_binary32`, `add_array_int32`, …) and matching `get_*`
-  readers; `serialize` / `deserialize` / `validate` / `to_detail_string`.
-- `zvec::IntoDoc` / `zvec::FromDoc` traits + `#[derive(IntoDoc)]` and
-  `#[derive(FromDoc)]` (via the `derive` feature) — skip `Doc::new() +
-  add_*` boilerplate on the write side and manual `get_*` decoding on
-  the read side:
-  ```rust
-  #[derive(IntoDoc, FromDoc)]
-  struct Article {
-      #[zvec(pk)] id: String,
-      title: String,
-      #[zvec(vector_fp32)] embedding: Vec<f32>,
-      summary: Option<String>,
-  }
-  let doc = article.into_doc()?;
-  collection.insert(&[&doc])?;
+---
 
-  let results = collection.fetch(&["a"])?;
-  let got: Article = Article::from_doc(results.get(0).unwrap())?;
-  ```
-  Attributes: `pk`, `skip`, `rename = "..."`, plus type hints for
-  `Vec`-typed fields (`binary`, `vector_fp32`, `vector_fp64`,
-  `vector_int8`, `vector_int16`). `Option<T>` is supported: on the
-  write side `None` emits a null field; on the read side a missing or
-  null field decodes as `None`.
-- `zvec::{DataType, IndexType, MetricType, QuantizeType, LogLevel,
-  LogType, DocOperator}` — strongly-typed mirrors of the C `typedef`s and
-  `#define`s, with an `Other(u32)` escape hatch for values not recognised
-  by this bindings version.
-- `zvec::{CollectionOptions, CollectionStats}` — options builder and the
-  stats snapshot returned by `Collection::stats`.
-- `zvec::{Config, LogConfig, initialize, shutdown, is_initialized}` —
-  optional global configuration passed to `initialize`; not required for
-  basic usage.
-- `zvec::{ErrorCode, ZvecError, Result, clear_last_error}` — errors carry
-  the last-error message from the C API when one is set.
-- `zvec::{version, version_major, version_minor, version_patch,
-  check_version}` — runtime version from the linked zvec library.
+## Environment variables
 
-All owning wrappers implement `Drop`.
+Read by `build.rs`:
+
+| Variable                     | Purpose |
+|------------------------------|---------|
+| `ZVEC_ROOT`                  | Install prefix (`lib/` + `include/zvec/`). |
+| `ZVEC_LIB_DIR`               | Directory containing `libzvec_c_api`. |
+| `ZVEC_INCLUDE_DIR`           | Directory containing `zvec/c_api.h` (defaults to vendored copy). |
+| `ZVEC_STATIC=1`              | Link `zvec_c_api` statically. |
+| `ZVEC_BUNDLED_WHEEL_URL`     | Custom wheel URL (requires `ZVEC_BUNDLED_WHEEL_SHA256`). |
+| `ZVEC_BUNDLED_WHEEL_SHA256`  | Expected SHA-256 for the URL override. |
+| `ZVEC_BUNDLED_WHEEL_PATH`    | Local `.whl` file to use instead of downloading. |
+
+---
+
+## Examples
+
+All examples live under [`examples/`](examples/). Run any of them with
+`--features bundled` (or one of the other install paths).
+
+| Example | Shows |
+|---------|-------|
+| [`version`](examples/version.rs) | Print the linked zvec's version. |
+| [`basic`](examples/basic.rs) | Port of zvec's own `basic_example.c`: schema, insert, flush, query. |
+| [`semantic_search`](examples/semantic_search.rs) | Index a small corpus + run a cosine query over 4-D embeddings. |
+| [`hybrid_search`](examples/hybrid_search.rs) | Two vector queries (title vs. body) fused with Reciprocal Rank Fusion. |
+| [`json_ingest`](examples/json_ingest.rs) | Feed `serde_json::Value`s into a collection via `Doc::from_json`. |
+| [`derive`](examples/derive.rs) | `#[derive(IntoDoc)]` / `#[derive(FromDoc)]` round-trip. |
+
+```sh
+cargo run --example basic           --features bundled
+cargo run --example semantic_search --features bundled
+cargo run --example hybrid_search   --features bundled
+cargo run --example json_ingest     --features "bundled serde-json"
+cargo run --example derive          --features "bundled derive"
+```
+
+---
+
+## API overview
+
+All safe wrappers re-export at the crate root. Full rustdoc:
+[docs.rs/zvec](https://docs.rs/zvec).
+
+- **[`Collection`](https://docs.rs/zvec/latest/zvec/struct.Collection.html)** —
+  create/open/flush/optimize; DDL (`create_index`, `drop_index`,
+  `add_column`, `drop_column`, `alter_column`); DML (`insert`, `update`,
+  `upsert`, `delete`, `delete_by_filter`, and `*_with_results` variants);
+  DQL (`query`, `fetch`) returning a `DocSet` that frees its C-side buffer
+  on drop.
+- **[`CollectionSchema`](https://docs.rs/zvec/latest/zvec/struct.CollectionSchema.html)
+  + [`FieldSchema`](https://docs.rs/zvec/latest/zvec/struct.FieldSchema.html)** —
+  schema construction, validation, field enumeration; both have a
+  `builder()` API with typed shorthands
+  (`FieldSchema::vector_fp32(...).hnsw(16, 200).metric(Cosine)`).
+- **Index / query params** — [`IndexParams`](https://docs.rs/zvec/latest/zvec/struct.IndexParams.html)
+  (HNSW / IVF / inverted), plus query-side
+  [`HnswQueryParams`](https://docs.rs/zvec/latest/zvec/struct.HnswQueryParams.html) /
+  [`IvfQueryParams`](https://docs.rs/zvec/latest/zvec/struct.IvfQueryParams.html) /
+  [`FlatQueryParams`](https://docs.rs/zvec/latest/zvec/struct.FlatQueryParams.html).
+- **[`VectorQuery`](https://docs.rs/zvec/latest/zvec/struct.VectorQuery.html)** /
+  **[`GroupByVectorQuery`](https://docs.rs/zvec/latest/zvec/struct.GroupByVectorQuery.html)** —
+  all fields/knobs from the C API plus a [`VectorQuery::builder()`](https://docs.rs/zvec/latest/zvec/struct.VectorQueryBuilder.html).
+- **[`Doc`](https://docs.rs/zvec/latest/zvec/struct.Doc.html)** /
+  **[`DocRef`](https://docs.rs/zvec/latest/zvec/struct.DocRef.html)** —
+  typed `add_*` / `get_*` for every zvec data type, plus `serialize` /
+  `deserialize` / `validate` / `to_detail_string`.
+- **Retrieval helpers** — [`HybridSearch`](https://docs.rs/zvec/latest/zvec/struct.HybridSearch.html)
+  fuses N queries, [`rerank::RrfReRanker`](https://docs.rs/zvec/latest/zvec/rerank/struct.RrfReRanker.html)
+  and [`rerank::WeightedReRanker`](https://docs.rs/zvec/latest/zvec/rerank/struct.WeightedReRanker.html)
+  work over any `Vec<Hit>`.
+- **Struct ↔ `Doc`** (feature `derive`) —
+  `#[derive(IntoDoc)]` / `#[derive(FromDoc)]` with `pk`, `skip`,
+  `rename = "..."`, and vector-type hints (`vector_fp32`, `vector_fp64`,
+  `vector_int8`, `vector_int16`, `binary`).
+- **[`AsyncCollection`](https://docs.rs/zvec/latest/zvec/struct.AsyncCollection.html)**
+  (feature `tokio`) — every op wrapped in `tokio::task::spawn_blocking`.
+- **[`Doc::from_json`](https://docs.rs/zvec/latest/zvec/struct.Doc.html#method.from_json)**
+  (feature `serde-json`) — JSON → `Doc` using the schema for type resolution.
+- **Errors + utilities** — [`ErrorCode`](https://docs.rs/zvec/latest/zvec/enum.ErrorCode.html) /
+  [`ZvecError`](https://docs.rs/zvec/latest/zvec/struct.ZvecError.html),
+  [`version()`](https://docs.rs/zvec/latest/zvec/fn.version.html),
+  [`Config`](https://docs.rs/zvec/latest/zvec/struct.Config.html) +
+  [`initialize`](https://docs.rs/zvec/latest/zvec/fn.initialize.html) for
+  optional global setup.
+
+---
 
 ## Thread safety
 
-Every wrapper has an explicit `unsafe impl` with a `SAFETY:` note.
+- `Send + Sync` — `Collection`, pure builders and snapshots (`CollectionSchema`,
+  `FieldSchema`, `IndexParams`, `HnswQueryParams`, `IvfQueryParams`,
+  `FlatQueryParams`, `CollectionOptions`, `CollectionStats`, `Config`,
+  `LogConfig`, `FieldSchemaRef<'_>`, `DocRef<'_>`).
+- `Send` only — types with mutable C-side state and no documented
+  thread-safe reads (`Doc`, `VectorQuery`, `GroupByVectorQuery`, `DocSet`).
 
-- **`Send + Sync`** (pure builder or read-only snapshot): `Config`,
-  `LogConfig`, `IndexParams`, `HnswQueryParams`, `IvfQueryParams`,
-  `FlatQueryParams`, `FieldSchema`, `FieldSchemaRef<'_>`,
-  `CollectionSchema`, `CollectionOptions`, `CollectionStats`,
-  `DocRef<'_>`, `Collection`.
-- **`Send` only** (mutable C-side state without documented thread-safe
-  reads): `Doc`, `VectorQuery`, `GroupByVectorQuery`, `DocSet`.
-
----
-
-## Running the examples and tests
-
-```sh
-# Print the runtime version reported by the linked zvec.
-cargo run --example version
-
-# Rust port of basic_example.c — creates a collection in $TMPDIR.
-cargo run --example basic
-
-# End-to-end integration tests (5 tests + doctest).
-cargo test
-```
-
-All three need `libzvec_c_api` available — either via `--features bundled`,
-`ZVEC_ROOT` pointing at a source build, or an external install. With
-`--features bundled` the resulting binary has an rpath baked in and needs
-no runtime env vars.
-
----
-
-## Cookbook
-
-End-to-end recipes you can `cargo run` directly. All assume
-`--features bundled` (or one of the install paths above) and live under
-[`examples/`](examples/).
-
-### Semantic search
-
-[`examples/semantic_search.rs`](examples/semantic_search.rs) — index a
-small corpus of text + 4-D embeddings, then query nearest neighbours by
-cosine similarity.
-
-```sh
-cargo run --example semantic_search --features bundled
-```
-
-### Hybrid search across multiple embeddings
-
-[`examples/hybrid_search.rs`](examples/hybrid_search.rs) — every doc
-carries a `title_emb` and a `body_emb`; a query against each is fused
-with Reciprocal Rank Fusion via [`HybridSearch`](src/hybrid.rs).
-
-```rust
-let hits = HybridSearch::new()
-    .query(title_q)
-    .query(body_q)
-    .top_k(10)
-    .execute(&collection)?;
-```
-
-```sh
-cargo run --example hybrid_search --features bundled
-```
-
-### JSON ingestion
-
-[`examples/json_ingest.rs`](examples/json_ingest.rs) — feed
-`serde_json::Value`s straight into the collection through
-`Doc::from_json`. Field types are resolved through the schema so the
-caller doesn't manually pick `add_string` vs `add_vector_fp32`.
-
-```sh
-cargo run --example json_ingest --features "bundled serde-json"
-```
-
-### Manual rerank
-
-`zvec::rerank::{RrfReRanker, WeightedReRanker}` are usable
-stand-alone — pass any `Vec<Hit>` you produce, from any source, not
-just `Collection::query`.
+Sharing a collection across threads is just `Arc<Collection>`.
 
 ---
 
 ## Comparison to [`igobypenn/zvec-rust-binding`](https://github.com/igobypenn/zvec-rust-binding)
 
-Both crates are Rust bindings to zvec, but they were designed in different
-zvec generations and take different architectural bets.
+Both crates are Rust bindings to zvec but they target different zvec
+generations and make different build-system bets.
 
-| | **`zvec-rs` (this crate)** | **`igobypenn/zvec-rust-binding`** |
+| | **`zvec-rs`** (this crate) | **`igobypenn/zvec-rust-binding`** |
 |---|---|---|
-| Upstream zvec version pinned | `v0.3.1` | `v0.2.1` (pre-official-C-API) |
-| FFI boundary | `bindgen` at upstream's own `c_api.h` (the C API added in zvec 0.3.0) | Hand-rolled `zvec-c-wrapper/` on top of zvec's C++ libs, then `bindgen` at that |
-| Crate shape | Single crate `zvec`, `sys` as a submodule | Workspace: `zvec-sys` + `zvec-bindings` + `zvec-c-wrapper` |
-| Default build behaviour | `cargo build` only runs `bindgen` — linking expects a prebuilt `libzvec_c_api` | `cargo build` downloads zvec source (~500 MB) and runs CMake; 5–15 min first time, cached |
-| Zero-setup option | `--features bundled` (47 MB wheel download, ~30 s) | *same* as the default — always compiles zvec |
-| Hand-rolled C shim | Not needed (upstream ships one) | Required (the pinned 0.2.1 predates the official one) |
-| Libs named at link time | One thing: `zvec_c_api` | `zvec_db` / `_core` + Arrow, Parquet, Boost, RocksDB, stdc++, pthread |
-| `Send` / `Sync` | Explicit per-type `unsafe impl` with `SAFETY:` notes | Opt-in `sync` feature providing a `SharedCollection: Arc<…>` |
-| Env-var overrides | `ZVEC_ROOT`, `ZVEC_LIB_DIR`, `ZVEC_INCLUDE_DIR`, `ZVEC_STATIC`, `ZVEC_BUNDLED_WHEEL_*` (describe where to *find* the lib) | `ZVEC_BUILD_TYPE`, `ZVEC_BUILD_PARALLEL`, `ZVEC_CPU_ARCH`, `ZVEC_OPENMP` (drive the *in-crate* CMake build) |
-| Extra high-level types | Typed `add_*` / `get_*` for every vector + array data type | Re-rankers (`RrfReRanker`, `WeightedReRanker`) |
+| Upstream zvec | `v0.3.1` (uses upstream's official `c_api.h`) | `v0.2.1` (pre-dates the C API; ships a hand-rolled shim) |
+| Default build | `bindgen` only — links to a prebuilt `libzvec_c_api` | Full CMake build of zvec from source every time |
+| Turnkey | `--features bundled` → ~30 s first build (47 MB wheel) | Always compiles zvec: 5–15 min first build, cached thereafter |
+| Install paths | `bundled` / source-build script / external install | Always source-build; the crate drives CMake |
+| Thread safety | Per-type `unsafe impl` with `SAFETY:` notes; `Arc<Collection>` for sharing | Opt-in `sync` feature with a dedicated `SharedCollection` |
+| Extras | Hybrid search, RRF + weighted rerankers, `#[derive(IntoDoc/FromDoc)]`, tokio wrapper, JSON ingest, fp16 | Rerankers |
 
-Headline difference: the other crate predates zvec's upstream C API, so it
-carries its own C shim and drags a full CMake build into every consumer's
-`cargo build`. That's more turnkey out of the box (one command, and you
-don't think about a shared library), but it also means:
-
-- First-time compile is 5–15 min unconditionally; zvec-rs with `bundled`
-  is ~30 s.
-- The shim enumerates zvec's transitive C++ dependencies by hand in its
-  linker config.
-- Upgrading zvec means updating a handwritten wrapper in lockstep with
-  internal zvec C++ headers.
-
-zvec-rs instead targets zvec's own `c_api.h` — a single
-`libzvec_c_api.so` that already bundles all of that — and offers three
-distinct install paths so you can pick your tradeoff: `bundled` for
-speed, source build for reproducibility, or external prebuilt for zero
-overhead. If you want re-rankers or you're stuck on zvec 0.2.x,
-`igobypenn/zvec-rust-binding` is still the right choice today.
+If you're stuck on zvec 0.2.x or want the single-command `cargo build`
+that compiles zvec for you, pick `igobypenn/zvec-rust-binding`. For
+everyone else, zvec-rs tracks upstream's maintained C API directly and
+lets you choose your build trade-off.
 
 ---
 
-## Repository layout
-
-```
-.
-├── vendor/c_api.h              # Pinned upstream C API (zvec v0.3.1).
-├── build.rs                    # bindgen + linker discovery; bundled-feature
-│                                 wheel fetch + extract.
-├── scripts/build-zvec.sh       # Reproducible source build helper.
-├── src/
-│   ├── sys.rs                  # `include!` of bindgen output.
-│   ├── lib.rs                  # Crate root + re-exports + doctest.
-│   ├── collection.rs           # Collection + DocSet + WriteSummary/Result.
-│   ├── doc.rs                  # Doc / DocRef + typed add_*/get_*.
-│   ├── schema.rs               # FieldSchema(/Ref) + CollectionSchema.
-│   ├── query.rs                # VectorQuery + GroupByVectorQuery.
-│   ├── query_params.rs         # HnswQueryParams / IvfQueryParams / FlatQueryParams.
-│   ├── index_params.rs         # IndexParams.
-│   ├── options.rs              # CollectionOptions.
-│   ├── stats.rs                # CollectionStats.
-│   ├── config.rs               # Config / LogConfig / initialize / shutdown.
-│   ├── types.rs                # DataType, IndexType, MetricType, ...
-│   ├── error.rs                # ErrorCode, ZvecError, Result, check().
-│   ├── version.rs              # version() / version_major() / ...
-│   └── ffi_util.rs             # cstring(), slice_as_bytes(), etc.
-├── examples/
-│   ├── version.rs              # Prints the runtime zvec version.
-│   └── basic.rs                # Rust port of basic_example.c.
-├── tests/integration.rs        # 5 end-to-end roundtrip tests.
-└── .github/workflows/
-    ├── ci.yml                  # Per-PR: bundled-feature matrix
-    │                           # (Linux + macOS) running rustfmt,
-    │                           # clippy, and tests against an
-    │                           # upstream-shipped libzvec_c_api.
-    └── source-build.yml        # Weekly cron + manual dispatch:
-                                # validates `scripts/build-zvec.sh`
-                                # by compiling zvec from source and
-                                # re-running the test suite.
-```
-
 ## Contributing
 
-- `cargo fmt --all` and `cargo clippy --all-targets --no-deps -- -D warnings`
-  are both enforced in CI; please run them locally before opening a PR.
-- The integration tests in `tests/integration.rs` exercise the library
-  end-to-end — they need a working `libzvec_c_api`. The `bundled` feature is
-  the lowest-friction way to get one: `cargo test --features bundled`.
-- When bumping the vendored zvec version, update `vendor/c_api.h`,
-  `ZVEC_REF` in `scripts/build-zvec.sh`, both workflow files in
-  `.github/workflows/`, and the pinned wheels in `build.rs`.
+- `cargo fmt --all` and
+  `cargo clippy --all-targets --no-deps -- -D warnings` are enforced in CI.
+- Integration tests (`tests/integration.rs`) exercise the full public
+  surface; they need a working `libzvec_c_api`. Easiest:
+  `cargo test --features bundled`.
+- When bumping the pinned zvec version, update: `vendor/c_api.h`,
+  `ZVEC_REF` in `scripts/build-zvec.sh`, the wheel pins in `build.rs`,
+  both `.github/workflows/*.yml`, and `CHANGELOG.md`.
 
 ## License
 

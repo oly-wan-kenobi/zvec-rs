@@ -1,4 +1,8 @@
-//! [`CollectionStats`] — statistics returned by [`crate::collection::Collection::stats`].
+//! [`CollectionStats`] — snapshot of a collection's size and index state.
+//!
+//! Returned by [`Collection::stats`](crate::Collection::stats). Lists the
+//! total doc count, the number of indexes, their names, and a rough
+//! completeness fraction per index.
 
 use std::ptr::NonNull;
 
