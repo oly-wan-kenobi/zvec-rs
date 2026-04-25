@@ -60,7 +60,7 @@ jobs:
       latest: ${{ steps.ver.outputs.latest }}
       has_update: ${{ steps.ver.outputs.has_update }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - id: ver
         shell: bash
@@ -101,7 +101,7 @@ jobs:
       tag: ${{ steps.push.outputs.tag }}
       crate_version: ${{ steps.push.outputs.crate_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -150,7 +150,7 @@ jobs:
         os: [ubuntu-22.04, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.bump.outputs.branch }}
 
@@ -195,7 +195,7 @@ jobs:
     outputs:
       tag: ${{ needs.bump.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -253,7 +253,7 @@ jobs:
       (needs.test.result == 'failure' || needs.merge-and-tag.result == 'failure')
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Open PR for human review
         env:
