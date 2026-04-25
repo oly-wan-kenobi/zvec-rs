@@ -58,7 +58,7 @@ zvec-derive = { version = "0.1", path = "zvec-derive", optional = true }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]
-bindgen = "0.70"
+bindgen = "0.72"
 pkg-config = { version = "0.3", optional = true }
 ureq = { version = "2.10", default-features = false, features = ["tls"], optional = true }
 zip = { version = "2.2", default-features = false, features = ["deflate"], optional = true }
