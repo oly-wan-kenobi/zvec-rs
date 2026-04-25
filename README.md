@@ -236,9 +236,11 @@ All safe wrappers re-export at the crate root. Full rustdoc:
   [`HnswQueryParams`](https://docs.rs/zvec/latest/zvec/struct.HnswQueryParams.html) /
   [`IvfQueryParams`](https://docs.rs/zvec/latest/zvec/struct.IvfQueryParams.html) /
   [`FlatQueryParams`](https://docs.rs/zvec/latest/zvec/struct.FlatQueryParams.html).
-- **[`VectorQuery`](https://docs.rs/zvec/latest/zvec/struct.VectorQuery.html)** /
-  **[`GroupByVectorQuery`](https://docs.rs/zvec/latest/zvec/struct.GroupByVectorQuery.html)** —
+- **[`VectorQuery`](https://docs.rs/zvec/latest/zvec/struct.VectorQuery.html)** —
   all fields/knobs from the C API plus a [`VectorQuery::builder()`](https://docs.rs/zvec/latest/zvec/struct.VectorQueryBuilder.html).
+- **[`GroupByVectorQuery`](https://docs.rs/zvec/latest/zvec/struct.GroupByVectorQuery.html)** —
+  configuration surface only; zvec 0.3.1 doesn't ship an executor C
+  function for it yet (see the type's rustdoc for upstream context).
 - **[`Doc`](https://docs.rs/zvec/latest/zvec/struct.Doc.html)** /
   **[`DocRef`](https://docs.rs/zvec/latest/zvec/struct.DocRef.html)** —
   typed `add_*` / `get_*` for every zvec data type, plus `serialize` /

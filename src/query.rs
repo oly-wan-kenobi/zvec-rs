@@ -185,6 +185,24 @@ unsafe impl Send for VectorQuery {}
 // GroupByVectorQuery
 // -----------------------------------------------------------------------------
 
+/// Configuration for a group-by similarity search.
+///
+/// # Upstream limitation
+///
+/// As of zvec **v0.3.1**, the C API ships
+/// `zvec_group_by_vector_query_t` with a complete setter/getter
+/// surface but **does not expose an executor function** —
+/// there is no `zvec_collection_query_group_by` or equivalent. As
+/// a result, this crate cannot offer a `Collection::query_group_by`
+/// method: there is nothing in the underlying library to call.
+///
+/// The type is wrapped here for forward-compatibility (and for
+/// callers using `Doc::serialize` / cross-process IPC of query
+/// configs). Once upstream adds an executor, a corresponding
+/// `Collection::query_group_by` will land in zvec-rs without
+/// breaking changes to this surface.
+///
+/// Track the upstream gap at <https://github.com/alibaba/zvec/issues>.
 pub struct GroupByVectorQuery {
     ptr: NonNull<sys::zvec_group_by_vector_query_t>,
 }
