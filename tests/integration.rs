@@ -1222,8 +1222,13 @@ fn add_column_then_drop_column_changes_schema() -> zvec::Result<()> {
 }
 
 // -----------------------------------------------------------------------------
-// GroupByVectorQuery: the getters/setters — Collection::query_group_by isn't
-// wrapped yet, so we round-trip the struct rather than executing it.
+// GroupByVectorQuery: getters/setters round-trip.
+//
+// zvec 0.3.1's C API ships the `zvec_group_by_vector_query_t` type with
+// a complete setter/getter surface but no executor function — there is
+// no `zvec_collection_query_group_by` to call. So this test exercises
+// the full configuration round-trip; an end-to-end test will land once
+// upstream adds an executor. See `GroupByVectorQuery`'s rustdoc.
 // -----------------------------------------------------------------------------
 
 #[test]
