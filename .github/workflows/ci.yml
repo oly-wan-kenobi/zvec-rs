@@ -63,3 +63,42 @@ jobs:
             export LD_LIBRARY_PATH="$LIB_DIR"
           fi
           cargo test --no-default-features --features "${{ env.FEATURES }}" --verbose
+
+      - name: Rustdoc (-D warnings)
+        # Catch broken intra-doc links + missing-doc lints before they
+        # reach docs.rs. We don't pass `--cfg docsrs` here because that
+        # activates `#![feature(doc_cfg)]` which only compiles on
+        # nightly; docs.rs itself does build under nightly. CI on
+        # stable just verifies the prose is clean.
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-default-features --features "${{ env.FEATURES }}" --no-deps
+
+  msrv:
+    name: MSRV (rust-toolchain pinned in Cargo.toml)
+    runs-on: ubuntu-22.04
+    # Confirms the `rust-version = "1.75"` pin in Cargo.toml still
+    # builds. Only checks compilation (no tests / clippy / fmt) — the
+    # bundled-feature matrix above has the full coverage on stable.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        shell: bash
+        run: |
+          set -euo pipefail
+          MSRV=$(grep -m1 '^rust-version = ' Cargo.toml | cut -d'"' -f2)
+          echo "version=$MSRV" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - name: Install libclang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check (--features "${{ env.FEATURES }}")
+        run: cargo check --no-default-features --features "${{ env.FEATURES }}" --all-targets

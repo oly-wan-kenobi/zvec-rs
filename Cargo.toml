@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-description = "Rust bindings to zvec, an in-process vector database by Alibaba."
+description = "Safe Rust bindings to zvec — Alibaba's lightweight in-process vector database. Schemas, HNSW search, hybrid retrieval, derive macros, async wrapper."
 repository = "https://github.com/oly-wan-kenobi/zvec-rs"
 documentation = "https://docs.rs/zvec"
 homepage = "https://github.com/oly-wan-kenobi/zvec-rs"
 readme = "README.md"
-keywords = ["vector", "database", "embedding", "ann", "ffi"]
-categories = ["api-bindings", "database"]
+keywords = ["vector-database", "embedding", "hnsw", "ann", "search"]
+categories = ["database", "external-ffi-bindings"]
 links = "zvec_c_api"
 exclude = [
     "/.github",
