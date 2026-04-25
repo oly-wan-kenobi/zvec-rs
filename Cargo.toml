@@ -2,7 +2,7 @@
 name = "zvec"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.86"
 license = "Apache-2.0"
 description = "Safe Rust bindings to zvec — Alibaba's lightweight in-process vector database. Schemas, HNSW search, hybrid retrieval, derive macros, async wrapper."
 repository = "https://github.com/oly-wan-kenobi/zvec-rs"

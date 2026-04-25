@@ -2,7 +2,7 @@
 name = "zvec-derive"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.86"
 license = "Apache-2.0"
 description = "Derive macros for the `zvec` crate: `#[derive(IntoDoc)]` and `#[derive(FromDoc)]` for ergonomic struct ↔ Doc conversion."
 repository = "https://github.com/oly-wan-kenobi/zvec-rs"

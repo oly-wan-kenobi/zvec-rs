@@ -7,7 +7,7 @@
 [![Dependencies](https://deps.rs/repo/github/oly-wan-kenobi/zvec-rs/status.svg)](https://deps.rs/repo/github/oly-wan-kenobi/zvec-rs)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/oly-wan-kenobi/zvec-rs/badge)](https://securityscorecards.dev/viewer/?uri=github.com/oly-wan-kenobi/zvec-rs)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![MSRV 1.75](https://img.shields.io/badge/MSRV-1.75-informational.svg)
+![MSRV 1.86](https://img.shields.io/badge/MSRV-1.86-informational.svg)
 
 Safe, idiomatic Rust bindings to [zvec](https://github.com/alibaba/zvec) —
 Alibaba's lightweight, in-process vector database.
