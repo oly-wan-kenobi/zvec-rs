@@ -1,0 +1,42 @@
+version: 2
+updates:
+  # Cargo dependencies (root crate + zvec-derive).
+  # Limit open PRs so we don't get flooded after a quiet period.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      # Bundle small ecosystem crates so they show up as one PR
+      # rather than five separate ones every week.
+      bindgen-toolchain:
+        patterns:
+          - "bindgen"
+          - "syn"
+          - "quote"
+          - "proc-macro2"
+      build-deps:
+        patterns:
+          - "ureq"
+          - "zip"
+          - "sha2"
+          - "pkg-config"
+    labels:
+      - "dependencies"
+
+  # GitHub Actions versions in our workflow YAMLs.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
