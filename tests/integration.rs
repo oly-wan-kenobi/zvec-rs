@@ -1570,6 +1570,7 @@ fn docset_iter_visits_every_hit() -> zvec::Result<()> {
 // AsyncCollection: expand coverage beyond the single roundtrip test
 // -----------------------------------------------------------------------------
 
+#[cfg(feature = "tokio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_update_delete_fetch_stats() {
     use zvec::AsyncCollection;
@@ -1637,6 +1638,7 @@ async fn async_update_delete_fetch_stats() {
     assert!(!o.read_only());
 }
 
+#[cfg(feature = "tokio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_upsert_iter_streams() {
     use zvec::AsyncCollection;
@@ -1657,6 +1659,7 @@ async fn async_upsert_iter_streams() {
     assert_eq!(collection.stats().await.expect("stats").doc_count(), 13);
 }
 
+#[cfg(feature = "tokio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_delete_by_filter_scopes() {
     use zvec::AsyncCollection;
