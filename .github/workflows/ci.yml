@@ -28,7 +28,7 @@ jobs:
     # then exercises the full Rust surface (rustfmt, clippy, tests) end
     # to end. This is the gate every PR must pass.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -81,7 +81,7 @@ jobs:
     # builds. Only checks compilation (no tests / clippy / fmt) — the
     # bundled-feature matrix above has the full coverage on stable.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Read MSRV from Cargo.toml
         id: msrv

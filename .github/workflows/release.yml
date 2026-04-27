@@ -44,7 +44,7 @@ jobs:
     permissions:
       contents: write     # needed to create the GitHub Release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
