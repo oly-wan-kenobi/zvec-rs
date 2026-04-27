@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/zvec?label=docs.rs)](https://docs.rs/zvec)
 [![crates.io](https://img.shields.io/crates/v/zvec.svg?label=crates.io)](https://crates.io/crates/zvec)
 [![Downloads](https://img.shields.io/crates/d/zvec.svg?label=downloads)](https://crates.io/crates/zvec)
-[![Dependencies](https://deps.rs/repo/github/oly-wan-kenobi/zvec-rs/status.svg)](https://deps.rs/repo/github/oly-wan-kenobi/zvec-rs)
+[![Dependencies](https://deps.rs/crate/zvec/latest/status.svg)](https://deps.rs/crate/zvec)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/oly-wan-kenobi/zvec-rs/badge)](https://securityscorecards.dev/viewer/?uri=github.com/oly-wan-kenobi/zvec-rs)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![MSRV 1.86](https://img.shields.io/badge/MSRV-1.86-informational.svg)
@@ -55,7 +55,9 @@ zvec = { version = "0.1", features = ["bundled"] }
 use zvec::{Collection, CollectionSchema, Doc, FieldSchema, MetricType, VectorQuery};
 
 fn main() -> zvec::Result<()> {
-    // Schema: text id (inverted index) + 3-D HNSW cosine embedding.
+    // Describe the collection: a string `id` field with an inverted index,
+    // plus a 3-D fp32 vector field indexed with HNSW (M=16, efConstruction=200)
+    // using cosine similarity.
     let schema = CollectionSchema::builder("docs")
         .field(FieldSchema::string("id").invert_index(true, false))
         .field(
@@ -65,23 +67,33 @@ fn main() -> zvec::Result<()> {
         )
         .build()?;
 
+    // Create the on-disk collection at `./my_coll` and open a handle to it.
+    // `None` accepts the default `CollectionOptions`.
     let collection = Collection::create_and_open("./my_coll", &schema, None)?;
 
+    // Build a single document. Every doc needs a primary key (`set_pk`);
+    // other fields are added by name and must match the schema's types.
     let mut doc = Doc::new()?;
     doc.set_pk("doc1")?;
     doc.add_string("id", "doc1")?;
     doc.add_vector_fp32("embedding", &[0.1, 0.2, 0.3])?;
+
+    // Insert the doc and flush so it is durable and visible to queries.
     collection.insert(&[&doc])?;
     collection.flush()?;
 
+    // Run a top-10 nearest-neighbour search against the `embedding` field.
     let q = VectorQuery::builder()
         .field("embedding")
         .vector_fp32(&[0.1, 0.2, 0.3])
         .topk(10)
         .build()?;
+
+    // Iterate the result set. `DocSet` frees its C-side buffer on drop.
     for row in collection.query(&q)?.iter() {
         println!("{:?} score={}", row.pk_copy(), row.score());
     }
+
     Ok(())
 }
 ```
@@ -226,8 +238,7 @@ All safe wrappers re-export at the crate root. Full rustdoc:
   `upsert`, `delete`, `delete_by_filter`, and `*_with_results` variants);
   DQL (`query`, `fetch`) returning a `DocSet` that frees its C-side buffer
   on drop.
-- **[`CollectionSchema`](https://docs.rs/zvec/latest/zvec/struct.CollectionSchema.html)
-  + [`FieldSchema`](https://docs.rs/zvec/latest/zvec/struct.FieldSchema.html)** —
+- **[`CollectionSchema`](https://docs.rs/zvec/latest/zvec/struct.CollectionSchema.html)** - [`FieldSchema`](https://docs.rs/zvec/latest/zvec/struct.FieldSchema.html)
   schema construction, validation, field enumeration; both have a
   `builder()` API with typed shorthands
   (`FieldSchema::vector_fp32(...).hnsw(16, 200).metric(Cosine)`).
@@ -276,27 +287,6 @@ All safe wrappers re-export at the crate root. Full rustdoc:
   thread-safe reads (`Doc`, `VectorQuery`, `GroupByVectorQuery`, `DocSet`).
 
 Sharing a collection across threads is just `Arc<Collection>`.
-
----
-
-## Comparison to [`igobypenn/zvec-rust-binding`](https://github.com/igobypenn/zvec-rust-binding)
-
-Both crates are Rust bindings to zvec but they target different zvec
-generations and make different build-system bets.
-
-| | **`zvec-rs`** (this crate) | **`igobypenn/zvec-rust-binding`** |
-|---|---|---|
-| Upstream zvec | `v0.3.1` (uses upstream's official `c_api.h`) | `v0.2.1` (pre-dates the C API; ships a hand-rolled shim) |
-| Default build | `bindgen` only — links to a prebuilt `libzvec_c_api` | Full CMake build of zvec from source every time |
-| Turnkey | `--features bundled` → ~30 s first build (47 MB wheel) | Always compiles zvec: 5–15 min first build, cached thereafter |
-| Install paths | `bundled` / source-build script / external install | Always source-build; the crate drives CMake |
-| Thread safety | Per-type `unsafe impl` with `SAFETY:` notes; `Arc<Collection>` for sharing | Opt-in `sync` feature with a dedicated `SharedCollection` |
-| Extras | Hybrid search, RRF + weighted rerankers, `#[derive(IntoDoc/FromDoc)]`, tokio wrapper, JSON ingest, fp16 | Rerankers |
-
-If you're stuck on zvec 0.2.x or want the single-command `cargo build`
-that compiles zvec for you, pick `igobypenn/zvec-rust-binding`. For
-everyone else, zvec-rs tracks upstream's maintained C API directly and
-lets you choose your build trade-off.
 
 ---
 
