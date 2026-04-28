@@ -20,6 +20,9 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -30,10 +33,13 @@ jobs:
     name: Build libzvec_c_api (from source)
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: write
     outputs:
       cache-key: ${{ steps.meta.outputs.cache-key }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Compute cache key
         id: meta
@@ -43,14 +49,14 @@ jobs:
 
       - name: Restore cached zvec install
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: zvec-install
           key: ${{ steps.meta.outputs.cache-key }}
 
       - name: Free up runner disk
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
           tool-cache: false
           android: true
@@ -95,7 +101,7 @@ jobs:
           sudo dmesg | tail -200 || true
 
       - name: Upload install prefix as an artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: libzvec_c_api
           path: zvec-install
@@ -105,16 +111,19 @@ jobs:
     name: rustfmt + clippy + tests (from-source lib)
     needs: build-zvec
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: libzvec_c_api
           path: zvec-install
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: rustfmt, clippy
 
@@ -127,7 +136,7 @@ jobs:
           echo "ZVEC_ROOT=$ABS"             >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$ABS/lib"   >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: rustfmt
         run: cargo fmt --all -- --check
