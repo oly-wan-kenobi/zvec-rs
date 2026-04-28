@@ -15,7 +15,7 @@ If you discover a security vulnerability in this project, please report it respo
 
 **Please do not open a public issue for security vulnerabilities.**
 
-Instead, report it privately via GitHub Security Advisories:
+Instead, report it privately via [GitHub Security Advisories](https://github.com/oly-wan-kenobi/zvec-rs/security/advisories/new):
 
 1. Go to the repository's **Security** tab.
 2. Click **Report a vulnerability** to open a private security advisory.
