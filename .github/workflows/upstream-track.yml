@@ -45,8 +45,7 @@ env:
   FEATURES: "bundled serde-json half tokio derive"
 
 permissions:
-  contents: write      # push commits + tags
-  pull-requests: write # open a fallback PR if test/merge fails
+  contents: read
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -60,7 +59,7 @@ jobs:
       latest: ${{ steps.ver.outputs.latest }}
       has_update: ${{ steps.ver.outputs.has_update }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - id: ver
         shell: bash
@@ -96,16 +95,18 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has_update == 'true'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     outputs:
       branch: ${{ steps.push.outputs.branch }}
       tag: ${{ steps.push.outputs.tag }}
       crate_version: ${{ steps.push.outputs.crate_version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with: { components: rustfmt }
 
       - name: Install tools
@@ -150,18 +151,18 @@ jobs:
         os: [ubuntu-22.04, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.bump.outputs.branch }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with: { components: rustfmt, clippy }
 
       - name: Install libclang (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev clang
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: rustfmt
         run: cargo fmt --all -- --check
@@ -192,10 +193,12 @@ jobs:
     name: Fast-forward main + tag ${{ needs.bump.outputs.tag }}
     needs: [bump, test]
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     outputs:
       tag: ${{ needs.bump.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
@@ -252,8 +255,11 @@ jobs:
       needs.bump.result == 'success' &&
       (needs.test.result == 'failure' || needs.merge-and-tag.result == 'failure')
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Open PR for human review
         env:
