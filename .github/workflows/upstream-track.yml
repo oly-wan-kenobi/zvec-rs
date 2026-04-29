@@ -256,12 +256,13 @@ jobs:
       (needs.test.result == 'failure' || needs.merge-and-tag.result == 'failure')
     runs-on: ubuntu-22.04
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Open PR for human review
+        id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ needs.bump.outputs.branch }}
@@ -288,5 +289,20 @@ jobs:
              \`$TAG\` manually to trigger the publish workflow.
           EOF
           )
-          gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY" || \
-            echo "PR may already exist for $BRANCH; skipping"
+          PR_URL=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY" 2>/dev/null) || {
+            PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+          }
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-merge clean bump (merge conflict only)
+        if: needs.test.result == 'success'
+        continue-on-error: true
+        env:
+          PR_URL: ${{ steps.create.outputs.pr_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "$PR_URL" ]; then
+            gh pr merge --admin --squash "$PR_URL"
+          else
+            echo "No PR URL found; skipping auto-merge"
+          fi
